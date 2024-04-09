@@ -177,3 +177,4 @@ pyrightconfig.json
 
 notebooks/output/
 ribasim_lumping/assets/countlines.py
+/notebooks/downstream_objects/results
