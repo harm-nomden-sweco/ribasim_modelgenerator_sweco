@@ -8,7 +8,8 @@ from shapely.geometry import Point, LineString, Polygon, MultiPolygon, GeometryC
 
 def create_graph_based_on_nodes_edges(
         nodes: gpd.GeoDataFrame, 
-        edges: gpd.GeoDataFrame
+        edges: gpd.GeoDataFrame,
+        add_edge_length_as_weight: bool = False,
     ) -> nx.DiGraph:
     """
     create networkx graph based on geographic nodes and edges.
@@ -21,7 +22,10 @@ def create_graph_based_on_nodes_edges(
             graph.add_node(node.node_no, pos=(node.geometry.x, node.geometry.y))
     if edges is not None:
         for i, edge in edges.iterrows():
-            graph.add_edge(edge.from_node, edge.to_node)
+            if add_edge_length_as_weight:
+                graph.add_edge(edge.from_node, edge.to_node, weight=edge.geometry.length)
+            else:
+                graph.add_edge(edge.from_node, edge.to_node)
     print(
         f" - create network graph from nodes ({len(nodes)}x) and edges ({len(edges)}x)"
     )
