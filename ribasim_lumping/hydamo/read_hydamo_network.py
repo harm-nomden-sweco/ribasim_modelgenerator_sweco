@@ -81,6 +81,10 @@ def add_hydamo_basis_network(
         pumps_df = gpd.read_file(hydamo_network_file, layer="pomp")
     else:
         pumps_df = None
-
-    return branches_gdf, network_nodes_gdf, edges_gdf, nodes_gdf, weirs_gdf, culverts_gdf, pumps_gdf, pumps_df, sluices_gdf, closers_gdf
+    
+    # set column names to lowercase and return
+    results = [branches_gdf, network_nodes_gdf, edges_gdf, nodes_gdf, weirs_gdf, culverts_gdf, pumps_gdf, pumps_df, sluices_gdf, closers_gdf]
+    results = [x.rename(columns={c: c.lower() for c in x.columns}) if x is not None else None 
+               for x in results]
+    return results
 

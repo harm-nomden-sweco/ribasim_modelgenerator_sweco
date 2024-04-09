@@ -823,19 +823,22 @@ def generate_ribasim_types_for_all_split_nodes(
     return boundaries, split_nodes, basins
 
 
-def check_basins_connected_to_basin_areas(basins: gpd.GeoDataFrame, basin_areas: gpd.GeoDataFrame):
+def check_basins_connected_to_basin_areas(
+        basins: gpd.GeoDataFrame, 
+        basin_areas: gpd.GeoDataFrame,
+        boundary_connections: gpd.GeoDataFrame,
+    ):
     """
-    Check if basin locations are associated basin area and if not, report it
+     Check if basin locations are connected with a basin area (ignoring basins generated for boundary connections)
     """
-    print(' - check if basins and basin areas are correctly connected')
-    check = True
-    for b in basins['basin']:
-        if b not in basin_areas['basin']:
-            if check:
-                print('   - Following basins are not connected to a basin area (either due to incorrect network input or multiple basins in the same basin area):')
-                print(f'      Basins ', end="", flush=True)
-                check = False
-            print(f"{b}, ", end="", flush=True)            
+    print(' - check if basins are connected to a basin area (ignoring basins generated for boundary connections)')
+    _basins = basins.loc[~np.isin(basins['basin'].values, boundary_connections['basin'].values)]
+    _basins = _basins.loc[~np.isin(_basins['basin'].values, basin_areas['basin'].values)]
+    if not _basins.empty:
+        print('   - Following basins are not connected to a basin area (either due to incorrect network input or multiple basins in the same basin area):')
+        print(f'      Basins ', end="", flush=True)
+        for b in sorted(_basins['basin'].values):
+            print(f"{b}, ", end="", flush=True)
     print("")
 
 
@@ -996,7 +999,8 @@ def generate_ribasim_network_using_split_nodes(
     )
     check_basins_connected_to_basin_areas(
         basins=basins, 
-        basin_areas=basin_areas
+        basin_areas=basin_areas,
+        boundary_connections=boundary_connections,
     )
     return dict(
         basin_areas=basin_areas,
