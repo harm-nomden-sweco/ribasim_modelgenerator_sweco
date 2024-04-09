@@ -2,8 +2,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 import sys
 import warnings
+import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from pydantic import BaseModel
 import pandas as pd
 import geopandas as gpd
@@ -266,6 +266,19 @@ def plot_results_basin_ribasim_model(
     basin_results: RibasimBasinResults = None,
     complete: bool = False
 ):
+    LEGEND_FONTSIZE = 8
+    TICK_FONTSIZE = 9
+    TITLES_FONTSIZE = 10
+    GENERAL_FONTSIZE = 10
+ 
+    matplotlib.rc('font', size=GENERAL_FONTSIZE)            # controls default text sizes
+    matplotlib.rc('axes', titlesize=TITLES_FONTSIZE)        # fontsize of the axes title
+    matplotlib.rc('axes', labelsize=TITLES_FONTSIZE)        # fontsize of the x and y labels
+    matplotlib.rc('xtick', labelsize=TICK_FONTSIZE)         # fontsize of the tick labels
+    matplotlib.rc('ytick', labelsize=TICK_FONTSIZE)         # fontsize of the tick labels
+    matplotlib.rc('legend', fontsize=LEGEND_FONTSIZE)       # legend fontsize
+    matplotlib.rc('figure', titlesize=GENERAL_FONTSIZE)     # fontsize of the figure title
+
     if ribasim_results is None:
         if not simulation_path.exists():
             raise ValueError(" x simulation_path {simulation_path} does not exist")
@@ -312,7 +325,7 @@ def plot_results_basin_ribasim_model(
     # storage
     ax1 = plt.subplot2grid((4, 5), (0, 0), colspan=3)
     ax1.set_title(f"{basin_name} ({basin_no})", fontsize=15)
-    basin.level.interpolate().rename(f"Level").plot(ax=ax1, style="-o", markersize=2)
+    basin.level.interpolate().rename(f"Level").plot(ax=ax1, style="-o", markersize=1.5)
     # if complete:
     #     ax1.hlines(
     #         y=basin_results.basin_profile['level'].min(), 
@@ -324,7 +337,7 @@ def plot_results_basin_ribasim_model(
 
     # level
     ax2 = plt.subplot2grid((4, 5), (1, 0), colspan=3)
-    basin.storage.interpolate().rename(f"Storage").plot(ax=ax2, style="-o", markersize=2)
+    basin.storage.interpolate().rename(f"Storage").plot(ax=ax2, style="-o", markersize=1.5)
     if control_storage is not None:
         ax1.hlines(
             y=control_storage.greater_than.values,
@@ -336,7 +349,7 @@ def plot_results_basin_ribasim_model(
     ax3.hlines(
         y=0.0, xmin=xmin, xmax=xmax, linestyle="-", color='black'
     )
-    basin.flow_rate.rename(f"Drainage+infiltration").plot(ax=ax3, style="-o", markersize=2)
+    basin.flow_rate.rename(f"Drainage+infiltration").plot(ax=ax3, style="-o", markersize=1.5)
     for i, inflow_edge in basin_results.inflow_edge.iterrows():
         from_node_id = inflow_edge["from_node_id"]
         from_node_name = inflow_edge["from_node_name"]
@@ -347,7 +360,7 @@ def plot_results_basin_ribasim_model(
          .plot(ax=ax3, 
             #    drawstyle="steps-post", 
                style="-o", 
-               markersize=3))
+               markersize=1.5))
     for i, outflow_edge in basin_results.outflow_edge.iterrows():
         to_node_id = outflow_edge["to_node_id"]
         to_node_name = outflow_edge["to_node_name"]
@@ -358,7 +371,7 @@ def plot_results_basin_ribasim_model(
          .plot(ax=ax3, 
             #    drawstyle="steps-post", 
                style="-o", 
-               markersize=3))
+               markersize=1.5))
 
     if complete:
         ax4 = plt.subplot2grid((4, 3), (0, 2), colspan=1, rowspan=1)
@@ -382,7 +395,7 @@ def plot_results_basin_ribasim_model(
             linestyle="-", 
             color='black'
         )
-        ax4.set_title(f"A-H relation", fontsize=10)
+        ax4.set_title(f"A-H relation", fontsize=10, loc='left')
         ax4.set_ylim([0.0, basin_profile.area.max()*1.1])
 
         ax5 = plt.subplot2grid((4, 3), (1, 2), colspan=1, rowspan=1)
@@ -397,7 +410,7 @@ def plot_results_basin_ribasim_model(
             ), 
             basin_results.basin.reset_index(drop=True)
         ]).reset_index(drop=True)
-        basin_storage.set_index("level").storage.rename('H-V relation').plot(ax=ax5, style='o', markersize=3)
+        basin_storage.set_index("level").storage.rename('H-V relation').plot(ax=ax5, style='o', markersize=1.5)
         ax5.vlines(
             x=basin_results.basin_profile.level.min(), 
             ymin=0.0, 
@@ -405,15 +418,24 @@ def plot_results_basin_ribasim_model(
             linestyle="-", 
             color='black'
         )
-        ax5.set_title(f"V-H relation", fontsize=10)
+        ax5.set_title(f"V-H relation", fontsize=10, loc='left')
         ax5.set_ylim([0.0, basin_storage.storage.max()*1.1])
 
         ax6 = plt.subplot2grid((4, 3), (2, 2), colspan=1, rowspan=2)
         for i, outflow_edge in basin_results.outflow_edge.iterrows():
             to_node_id = outflow_edge["to_node_id"]
+            to_node_name = outflow_edge["to_node_name"]
+            target_node_id = outflow_edge["target_node_id"]
+            target_name = outflow_edge["target_name"]
             q_h_relation = (basin_results.outflow.loc[to_node_id][["flow_rate"]]
                             .merge(basin_results.basin[["level"]], how="inner", left_index=True, right_index=True))
-            ax6.plot(q_h_relation.level, q_h_relation.flow_rate, "o", markersize=3)
+            ax6.plot(
+                q_h_relation.level, 
+                q_h_relation.flow_rate, 
+                "o", 
+                markersize=1.5, 
+                label=f"Outflow to {target_name} ({target_node_id}) via {to_node_name} ({to_node_id})"
+            )
         ax6.vlines(
             x=basin_results.basin_profile.level.min(), 
             ymin=0.0, 
@@ -421,7 +443,7 @@ def plot_results_basin_ribasim_model(
             linestyle="-", 
             color='black'
         )
-        ax6.set_title(f"Q-H relation", fontsize=10)
+        ax6.set_title(f"Q-H relation", fontsize=10, loc='left')
         ax6.set_ylim([0.0, basin_results.outflow.max().values*1.1])
 
     # control levels
@@ -475,15 +497,15 @@ def plot_results_basin_ribasim_model(
 
     if not complete:
         for ax in [ax1, ax2, ax3]:
-            ax.tick_params(axis='both', which='major', labelsize=10)
+            ax.tick_params(axis='both', which='major', labelsize=TICK_FONTSIZE)
             ax.grid(color='lightgrey', linewidth=0.5)
-            ax.legend(loc='center left', bbox_to_anchor=(1.025, 0.5), fontsize=8)
+            ax.legend(loc='center left', bbox_to_anchor=(1.025, 0.5), fontsize=LEGEND_FONTSIZE)
         return ribasim_model, ribasim_results, basin_results, fig, [ax1, ax2, ax3]
     else:
         for ax in [ax1, ax2, ax3]:
-            ax.tick_params(axis='both', which='major', labelsize=10)
+            ax.tick_params(axis='both', which='major', labelsize=TICK_FONTSIZE)
             ax.grid(color='lightgrey', linewidth=0.5)
-            ax.legend(loc='best', fontsize=8)
+            ax.legend(loc='upper right', fontsize=LEGEND_FONTSIZE)
 
         ax4.grid(color='lightgrey', linewidth=0.5)
         ax4.set_xlabel(None)
@@ -498,6 +520,7 @@ def plot_results_basin_ribasim_model(
         ax6.grid(color='lightgrey', linewidth=0.5)
         ax6.set_xlabel('Level [mAD]')
         ax6.set_ylabel("Flow [m3/s]")
+        ax6.legend(loc='upper left', fontsize=LEGEND_FONTSIZE)
         
         return ribasim_model, ribasim_results, basin_results, fig, [ax1, ax2, ax3, ax6, ax4]
         

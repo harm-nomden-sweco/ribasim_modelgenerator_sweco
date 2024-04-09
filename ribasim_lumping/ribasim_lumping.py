@@ -451,7 +451,7 @@ class RibasimLumpingNetwork(BaseModel):
         dummy_model: bool = False,
         interpolation_lines: int = 5,
         saveat: int = 24*3600,
-        maxiters: int = 100000,
+        maxiters: int = None,
         starttime: datetime.datetime = None,
         endtime: datetime.datetime = None,
         results_subgrid: bool = False,
@@ -570,7 +570,10 @@ class RibasimLumpingNetwork(BaseModel):
         if self.simulation_path is None:
             self.simulation_path = Path(self.results_dir, self.simulation_code)
         # check for timestep (saveat)
-        ribasim_model.solver = ribasim.Solver(saveat=saveat, maxiters=maxiters, sparse=False)
+        if maxiters is None:
+            ribasim_model.solver = ribasim.Solver(saveat=saveat, sparse=False)
+        else:
+            ribasim_model.solver = ribasim.Solver(saveat=saveat, maxiters=maxiters, sparse=False)
         ribasim_model.results = ribasim.Results(subgrid=results_subgrid)
 
         self.ribasim_model = ribasim_model

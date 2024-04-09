@@ -256,7 +256,7 @@ def generate_tabulated_rating_curve(
             culvert=culvert_q_df,
             bridge=bridge_q_df,
             pump=pump_q_df,
-            edge=edge_q_df,
+            openwater=edge_q_df,
         )
         discharges = discharges_list[split_type]
         if discharges is None:

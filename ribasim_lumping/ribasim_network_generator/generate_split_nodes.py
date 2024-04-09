@@ -99,7 +99,7 @@ def add_split_nodes_based_on_selection(
     ]
 
     # include/exclude edge centers
-    if edges or len(edge_ids_to_include) > 1:
+    if edges or len(edge_ids_to_include) >= 1:
         additional_split_nodes = None
         if edges:
             additional_split_nodes = network_edges.copy()
@@ -115,7 +115,8 @@ def add_split_nodes_based_on_selection(
             additional_split_nodes.geometry = additional_split_nodes.geometry.apply(
                 lambda g: g.interpolate(0.5, normalized=True)
             )
-            additional_split_nodes["split_node_id"] = additional_split_nodes["branch_id"] + "__" + additional_split_nodes["edge_no"].astype(str)
+            # additional_split_nodes["split_node_id"] = additional_split_nodes["branch_id"] + "__" + additional_split_nodes["edge_no"].astype(str)
+            additional_split_nodes["split_node_id"] = additional_split_nodes["edge_no"]
             additional_split_nodes["object_type"] = "openwater"
             additional_split_nodes["node_no"] = -1
             split_nodes = pd.concat([split_nodes, additional_split_nodes])
