@@ -465,9 +465,9 @@ def snap_points_to_nodes_and_edges(
                         check = True
                     else:
                         if 'split_node' in points.columns:
-                            point_label = f"Split node {points['split_node'].values[i]}"
+                            point_label = f"Split node {points['split_node'].values[i]} (xy={point.x:3f},{point.y:3f})"
                         else:
-                            point_label = f"Point with index {points.index.values[i]}"
+                            point_label = f"Point with index {points.index.values[i]} (xy={point.x:3f},{point.y:3f})"
                         print(f"  DEBUG - {point_label} can be snapped to node no {node_no} "
                               f"but number of connected edges to node ({len(_edges)}) is equal or higher than limit "
                               f"({n_edges_to_node_limit}). Don't snap to node and try to snap to edge. Please inspect manually")
@@ -850,9 +850,13 @@ def assign_unassigned_areas_to_basin_areas(
                 try:
                     bs = np.array(area_to_basin[k])[np.isin(area_to_basin[k], drain_to_basin[area_to_drain[k]])]
                     lengths = [areas.loc[k, 'geometry'].intersection(basin_areas.loc[basin_areas['basin'] == b, 'geometry']).length.values[0] for b in bs]
-                    basin_sel = bs[np.argmax(lengths, keepdims=True)[0]]
                 except KeyError:
+                    # in this case the area is not overlapping a drainage area
+                    bs = v
+                    lengths = [areas.loc[k, 'geometry'].intersection(basin_areas.loc[basin_areas['basin'] == b, 'geometry']).length.values[0] for b in v]
                     continue
+                try:
+                    basin_sel = bs[np.argmax(lengths, keepdims=True)[0]]
                 except ValueError:
                     continue
             # don't do assign if no basin area is touching area
@@ -924,7 +928,7 @@ def assign_unassigned_areas_to_basin_areas(
     basin_areas["color_no"] = basin_areas.index % 50
     
     if len(areas.loc[areas['basin'].isna()]) > 0:
-        print(f" - not all unassigned areas could be assigned automatically ({areas.loc[areas['basin'].isna()]}x remaining). Please inspect manually")
+        print(f" - not all unassigned areas could be assigned automatically ({len(areas.loc[areas['basin'].isna()])}x remaining). Please inspect manually")
 
     to_return['areas'] = areas.copy()
     to_return['basin_areas'] = basin_areas.copy()
