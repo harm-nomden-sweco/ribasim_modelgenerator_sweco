@@ -589,6 +589,7 @@ class RibasimLumpingNetwork(BaseModel):
             self.edges_gdf[["edge_id", "edge_no", "from_node", "to_node", "geometry"]],
             how="left"
         )
+        open_water_no_id = open_water_no_id.loc[~open_water_no_id.index.duplicated(keep='first')]  # remove duplicate spatial joins
         open_water_no_id["split_node_id"] = open_water_no_id["edge_id"]
         split_nodes = pd.concat([non_open_water_no_id, open_water_no_id])
 
