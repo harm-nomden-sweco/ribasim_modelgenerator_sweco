@@ -553,13 +553,31 @@ class RibasimLumpingNetwork(BaseModel):
         )
         hydamo_objects = hydamo_objects.sort_values('object_type')
         hydamo_objects_buffer = hydamo_objects[["object_type", "code", "geometry"]].rename(columns={"code": "split_node_id"})
-        hydamo_objects_buffer.geometry=hydamo_objects_buffer.geometry.buffer(0.001)
+        hydamo_objects_buffer.geometry = hydamo_objects_buffer.geometry.buffer(0.001)
 
         new_split_nodes = gpd.sjoin(
-            new_split_nodes[["geometry"]], 
+            new_split_nodes[["object_type", "geometry"]].rename(columns={'object_type': 'split_node_object_type'}), 
             hydamo_objects_buffer,
             how='left'
         ).drop(columns=["index_right"])
+
+        # check if object_type is provided for split_node to use that in case of duplicates after spatial join
+        dup_new_split_nodes = new_split_nodes.loc[new_split_nodes.index.duplicated(keep=False)]
+        non_dup_new_split_nodes = new_split_nodes.loc[~new_split_nodes.index.duplicated(keep=False)]
+        filtered_dup_new_split_nodes = pd.DataFrame()
+        for i in np.unique(dup_new_split_nodes.index):
+            tmp = dup_new_split_nodes.loc[i]
+            tmp = tmp.loc[[s == o for s, o in zip(tmp['split_node_object_type'], tmp['object_type'])]]
+            if tmp.empty:
+                # this means either that object_type in split_nodes is not equal to joined hydamo object type(s)
+                # just take the first of the joined hydamo objects
+                tmp = dup_new_split_nodes.loc[i].iloc[[0]]
+            else:
+                # in case multiple of the same object type are joined, take the first one
+                tmp = tmp.sort_values('object_type').iloc[[0]]
+            filtered_dup_new_split_nodes = pd.concat([filtered_dup_new_split_nodes, tmp])
+        new_split_nodes = pd.concat([non_dup_new_split_nodes, filtered_dup_new_split_nodes])
+        new_split_nodes.drop(columns=['split_node_object_type'], inplace=True)
 
         split_nodes = pd.concat([old_split_nodes, new_split_nodes]).sort_values(by=["split_node", "object_type"])
         split_nodes["object_type"] = split_nodes["object_type"].fillna("openwater")
@@ -576,6 +594,8 @@ class RibasimLumpingNetwork(BaseModel):
 
         split_nodes = split_nodes.reset_index(drop=True)
         split_nodes["split_node"] = split_nodes.index + 1
+
+        split_nodes = log_and_remove_duplicate_geoms(split_nodes, colname='split_node')
 
         self.split_nodes = split_nodes.copy()
 
