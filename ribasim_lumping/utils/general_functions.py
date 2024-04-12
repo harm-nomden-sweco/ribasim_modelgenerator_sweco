@@ -749,8 +749,11 @@ def split_line_in_multiple(line: LineString, distances_along_line: Union[List[Un
                 lines = ls
                 break
             else:
-                lines.append(ls[0])
-                new_line = ls[1]
+                if len(ls) == 1:
+                    new_line = ls[0]  # this can happen if distance to split is 0 which results in no splitted line
+                else:
+                    lines.append(ls[0])
+                    new_line = ls[1]
         else:
             new_d = distances_along_line[i] - distances_along_line[i-1]
             if new_d == 0.0:
