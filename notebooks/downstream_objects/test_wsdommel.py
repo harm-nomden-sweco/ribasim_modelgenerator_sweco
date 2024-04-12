@@ -113,14 +113,15 @@ else:
 
 
 ## START OF DOWNSTREAM OBJECTS STUFF ##
-from ribasim_lumping.utils.general_functions import split_edges_by_split_nodes
+from ribasim_lumping.utils.general_functions import split_edges_by_split_nodes, snap_points_to_nodes_and_edges
 from ribasim_lumping.ribasim_network_generator.generate_ribasim_network import create_graph_based_on_nodes_edges
 import networkx as nx
 
-def get_direct_downstream_structures_for_nodes(
-        structures: gpd.GeoDataFrame,
-        edges: gpd.GeoDataFrame,    
-        nodes: gpd.GeoDataFrame,
+def get_downstream_objects_on_path_for_nodes(
+        self = network,
+        edges: gpd.GeoDataFrame = None,  
+        nodes: gpd.GeoDataFrame = None,
+        structures: gpd.GeoDataFrame = None,
         split_nodes: gpd.GeoDataFrame = None,
     ) -> gpd.GeoDataFrame:
     """
@@ -132,21 +133,44 @@ def get_direct_downstream_structures_for_nodes(
     Supply split nodes optionally to update structure point geometries with snapped split nodes to avoid duplication
     Parameters
     ----------
-    structures (gpd.GeoDataFrame):               
-        GeoDataFrame containing all structure geometries. Should include 'code' column
     edges (gpd.GeoDataFrame):
-        GeoDataFrame containing edges. Should include a 'basin' column with the associated basin code
+        GeoDataFrame containing edges. Should include a 'basin' column with the associated basin code. If not provided, it will use all edges stored within
+        the RibasimLumpingNetwork object
     nodes (gpd.GeoDataFrame):
-        GeoDataFrame containing nodes (that are compliant with edges). These will be returned as a result with info of downstream structure
+        GeoDataFrame containing nodes (that are compliant with edges). These will be returned as a result with info of downstream structure. If not provided, 
+        it will use all nodes stored within the RibasimLumpingNetwork object
+    structures (gpd.GeoDataFrame):               
+        (optional) GeoDataFrame containing all structure geometries. Should include 'code' column. If not provided, it will use all structures stored within
+        the RibasimLumpingNetwork object
     split_nodes (gpd.GeoDataFrame):
-        (optional) snapped split nodes to edges/nodes. Should include 'split_node_id' column which contains code that is used in structures geodataframe
+        (optional) snapped split nodes to edges/nodes. Should include 'split_node_id' column which contains code that is used in structures geodataframe. If not 
+        provided, it will use all structures stored within the RibasimLumpingNetwork object
     
     Returns
     -------
     GeoDataFrames with nodes with 2 columns added containing direct downstream structure node no and the path length from node to that structure
     """
 
-    structures, edges, nodes_orig = structures.copy(), edges.copy(), nodes.copy()
+    if nodes is None:
+        nodes = self.nodes_gdf
+    if edges is None:
+        edges = self.edges_gdf
+    if structures is None:
+        structures = self.get_all_structures(line_as_point=True)
+    if split_nodes is None:
+        split_nodes = self.split_nodes
+    nodes_orig = nodes.copy()  # make backup of nodes gdf to join the new information later back to
+    structures, edges, nodes, split_nodes = structures.copy(), edges.copy(), nodes.copy(), split_nodes.copy()
+    # make sure nodes and edges are unique
+    nodes, edges = nodes.loc[~nodes['node_no'].duplicated()], edges.loc[~edges['edge_no'].duplicated()]
+    # snap structures to nodes and edges
+    structures = snap_points_to_nodes_and_edges(
+        points=structures,
+        edges=edges,
+        nodes=nodes,
+        edges_bufdist=5,
+        nodes_bufdist=0.5,
+    )
     # update structure point locations with already snapped points of split nodes
     if split_nodes is not None:
         structures.geometry = [split_nodes.loc[split_nodes['split_node_id'] == c]['geometry'].values[0]
@@ -211,11 +235,27 @@ def get_direct_downstream_structures_for_nodes(
 
     return nodes_updated
 
+def get_all_structures(
+        self = network,
+        line_as_point: bool = False
+    ):
+    """Returns all structures in one GeoDataFrame"""
+    structures = pd.DataFrame()
+    for s in ['culverts', 'bridges', 'orifices', 'pumps', 'sluices', 'uniweirs', 'weirs']:
+        structures = pd.concat([structures, eval(f"network.{s}_gdf")])
+    if line_as_point:
+        structures['geometry'] = [g.interpolate(0.5, normalized=True) if 'LINESTRING' in str(g) else g
+                                  for g in structures['geometry']]
+    return gpd.GeoDataFrame(structures, geometry='geometry', crs=network.weirs_gdf.crs)
+
+
+network_backup = pickle.load(open(str(ribasim_network_pickle), 'rb'))
+network.__dict__['get_downstream_objects_on_path_for_nodes'] = get_downstream_objects_on_path_for_nodes
+network.__dict__['get_all_structures'] = get_all_structures
 
 
 
-
-
+network.get_downstream_objects_on_path_for_nodes()
 
 
 
