@@ -634,7 +634,7 @@ def generate_ribasim_types_for_all_split_nodes(
         "weir": "TabulatedRatingCurve",
         "uniweir": "TabulatedRatingCurve",
         "pump": "Pump",
-        "culvert":"ManningResistance",
+        "culvert": "ManningResistance",
         "manual": "ManningResistance",
         "orifice": "TabulatedRatingCurve",
         "boundary_connection": "LinearResistance"

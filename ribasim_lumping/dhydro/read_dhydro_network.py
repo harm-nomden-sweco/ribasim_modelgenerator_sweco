@@ -402,6 +402,8 @@ def get_dhydro_forcing_data(
 
 
     def get_laterals_data_df(laterals_data, laterals_gdf):
+        if laterals_data is None:
+            return None
         laterals_data = laterals_data.merge(laterals_gdf["name"], how="right", left_on="name", right_on="name")
         laterals_df = pd.DataFrame()
         laterals_floats = dict()
@@ -430,9 +432,9 @@ def get_dhydro_volume_based_on_basis_simulations(
     mdu_file = find_file_in_directory(mdu_input_dir, ".mdu")
     volume_nc_file = find_file_in_directory(mdu_input_dir, "PerGridpoint_volume.nc")
     if volume_nc_file is None or volume_tool_force:
-        subprocess.Popen(
-            f'"{volume_tool_bat_file}" --mdufile "{mdu_file.name}" --increment {str(volume_tool_increment)} --outputfile volume.nc --output "All"', cwd=str(mdu_file.parent)
-        )
+        subproces_cli = f'"{volume_tool_bat_file}" --mdufile "{mdu_file.name}" --increment {str(volume_tool_increment)} --outputfile volume.nc --output "All"'
+        display(subproces_cli)
+        subprocess.Popen(subproces_cli, cwd=str(mdu_file.parent))
         volume_nc_file = find_file_in_directory(mdu_input_dir, "PerGridpoint_volume.nc")
         print(f"  - volume_tool: new level-volume dataframe created: {volume_nc_file.name}")
     else:
