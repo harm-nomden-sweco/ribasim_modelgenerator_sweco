@@ -298,8 +298,9 @@ network.nodes_gdf = network.get_downstream_objects_on_path_for_nodes()
 ### THIS PART IS USED TO TRANSFORM INFORMATION IN nodes_updates TO EXPORTABLE GEOPACKAGE SO
 ### WE CAN CHECK THE RESULTS IN GIS ###
 for i, row in network.nodes_gdf.iterrows():
-    if not pd.isnull(row['downstream_structures']):
-        xx = 2
+    if row['downstream_structures'] is not None:
+        new = [f'({c},{l:.2f})' for c, l in zip(row['downstream_structures']['structure_code'], row['downstream_structures']['path_length_to_structure'])]
+        network.nodes_gdf.at[i, 'downstream_structures'] = ', '.join(new)
 
 network.export_to_geopackage(simulation_code=simulation_code)
 
