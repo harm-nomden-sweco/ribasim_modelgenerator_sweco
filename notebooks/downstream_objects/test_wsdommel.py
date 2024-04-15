@@ -141,7 +141,7 @@ def get_downstream_objects_on_path_for_nodes(
         it will use all nodes stored within the RibasimLumpingNetwork object
     structures (gpd.GeoDataFrame):               
         (optional) GeoDataFrame containing all structure geometries. Should include 'code' column. If not provided, it will use all structures stored within
-        the RibasimLumpingNetwork object
+        the RibasimLumpingNetwork object. Only weir and pump structures will be considered.
     split_nodes (gpd.GeoDataFrame):
         (optional) snapped split nodes to edges/nodes. Should include 'split_node_id' column which contains code that is used in structures geodataframe. If not 
         provided, it will use all structures stored within the RibasimLumpingNetwork object
@@ -151,6 +151,7 @@ def get_downstream_objects_on_path_for_nodes(
     GeoDataFrames with nodes with 2 columns added containing direct downstream structure node no and the path length from node to that structure
     """
 
+    print('Determining downstream structures for each node per basin')
     if nodes is None:
         nodes = self.nodes_gdf
     if edges is None:
@@ -163,6 +164,8 @@ def get_downstream_objects_on_path_for_nodes(
     structures, edges, nodes, split_nodes = structures.copy(), edges.copy(), nodes.copy(), split_nodes.copy()
     # make sure nodes and edges are unique
     nodes, edges = nodes.loc[~nodes['node_no'].duplicated()], edges.loc[~edges['edge_no'].duplicated()]
+    # only consider weir and pump structures
+    structures = structures.loc[[s in ['weir', 'stuw', 'pump', 'gemaal'] for s in structures['object_type']]]
     # snap structures to nodes and edges
     structures = snap_points_to_nodes_and_edges(
         points=structures,
@@ -181,9 +184,8 @@ def get_downstream_objects_on_path_for_nodes(
     structures, edges, nodes = split_edges_by_split_nodes(structures, edges=edges)
     structures.columns = [c.lower() for c in structures.columns]
     # initialize new columns
-    nodes['downstream_structure_code'] = np.nan
-    nodes['downstream_structure_node_no'] = np.nan
-    nodes['downstream_structure_path_length'] = np.nan
+    nodes['downstream_structures'] = None
+    nodes['downstream_structures'] = nodes['downstream_structures'].astype(object)
     # go over each basin individually to restrict the network size
     basin_nrs = np.sort(edges['basin'].unique())
     basin_nrs = basin_nrs[basin_nrs >= 1]
@@ -197,7 +199,9 @@ def get_downstream_objects_on_path_for_nodes(
             continue  # skip if no structures are within basin
 
         # create graph
+        print("\r", end="")
         _graph = create_graph_based_on_nodes_edges(_nodes, _edges, add_edge_length_as_weight=True)
+        print("\r", end="")
 
         # get shortest paths between nodes (keeping in mind direction of edges in graph) and the lengths of those paths
         paths = dict(nx.all_pairs_dijkstra_path(_graph))
@@ -207,28 +211,36 @@ def get_downstream_objects_on_path_for_nodes(
         structure_nodes = {k: v for k, v in zip(_structures['node_no'].values, _structures['code'].values)}
         store = {}
         for k, vps in paths.items():
-            length_to_structures = {vp: path_lengths[k][vp] for vp in vps.keys() if vp in structure_nodes.keys()}
+            paths_and_length_to_structures = {vp: (paths[k][vp], path_lengths[k][vp]) for vp in vps.keys() 
+                                              if (vp in structure_nodes.keys())}  # only look at the structures as look from the point of view from the selected node
+            
+            # exclude current selected structure from lengths
+            paths_and_length_to_structures = {_k: _v for _k, _v in paths_and_length_to_structures.items() if _k != k}
 
-            # select the structure and store together with structure code and distance from node to that structure
-            if k in structure_nodes.keys():
-                store[k] = (k, structure_nodes[k], 0)  # node is a structure
-            elif len(length_to_structures.keys()) == 0:
+            # exclude structures that are located downstream of another structure in the list (check if == 1 because each path contains also the structure of interest)
+            length_to_structures = {_k: _v[1] for _k, _v in paths_and_length_to_structures.items()
+                                    if len([__k for __k in paths_and_length_to_structures.keys() if __k in _v[0]]) == 1}
+
+            # select the structure(s) and store together with structure code(s) and distance(s) from node to that structure
+            # note that multiple structures can be selected if there are multiple paths from node to a structure (for example due to bifurcation downstream)
+            if len(length_to_structures.keys()) == 0:
                 store[k] = None  # there is no downstream structure within basin for node
             else:
-                n = list(length_to_structures.keys())[np.argmin(length_to_structures.values())]
-                store[k] = (n, structure_nodes[n], length_to_structures[n])
+                n = list(length_to_structures.keys())
+                if None in [structure_nodes[_n] for _n in n]:
+                    print([structure_nodes[_n] for _n in n])
+                store[k] = (n, [structure_nodes[_n] for _n in n], [length_to_structures[_n] for _n in n])
 
         # save in nodes geodataframe
         for k, v in store.items():
             if v is not None:
-                nodes.loc[nodes['node_no'] == k, 'downstream_structure_node_no'] = v[0]
-                nodes.loc[nodes['node_no'] == k, 'downstream_structure_code'] = v[1]
-                nodes.loc[nodes['node_no'] == k, 'downstream_structure_path_length'] = v[2]
+                ix = nodes.loc[nodes['node_no'] == k].index.values[0]
+                nodes.at[ix, 'downstream_structures'] = pd.DataFrame(data={'node_no': v[0], 'structure_code': v[1], 'path_length_to_structure': v[2]})
 
     # update original nodes geodataframe with downstream structure info using spatial join with max 5 cm buffer
     nodes_updated = nodes_orig.copy()
     nodes_updated = nodes_updated.sjoin_nearest(
-        nodes[['downstream_structure_node_no', 'downstream_structure_code', 'downstream_structure_path_length', 'geometry']], 
+        nodes[['downstream_structures', 'geometry']], 
         how='left', 
         max_distance=0.05
     )
@@ -238,26 +250,58 @@ def get_downstream_objects_on_path_for_nodes(
 def get_all_structures(
         self = network,
         line_as_point: bool = False
-    ):
+    ) -> gpd.GeoDataFrame:
     """Returns all structures in one GeoDataFrame"""
     structures = pd.DataFrame()
     for s in ['culverts', 'bridges', 'orifices', 'pumps', 'sluices', 'uniweirs', 'weirs']:
         structures = pd.concat([structures, eval(f"network.{s}_gdf")])
+    structures.reset_index(drop=True, inplace=True)
     if line_as_point:
         structures['geometry'] = [g.interpolate(0.5, normalized=True) if 'LINESTRING' in str(g) else g
                                   for g in structures['geometry']]
+    structures = fill_code_column_structures(structures)
     return gpd.GeoDataFrame(structures, geometry='geometry', crs=network.weirs_gdf.crs)
 
+def fill_code_column_structures(
+        structures: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+    # fill code with naam or globalid (if naam not present) if code is empty
+    crs = structures.crs
+    count = 1
+    for i in structures.index.values:
+        if pd.isnull(structures.at[i, 'code']):
+            if 'naam' in structures.columns:
+                structures.at[i, 'code'] = structures.at[i, 'naam']
+        if pd.isnull(structures.at[i, 'code']):
+            structures.at[i, 'code'] = structures.at[i, 'globalid']
+        if pd.isnull(structures.at[i, 'code']):
+            structures.at[i, 'code'] = f'geen_code_naam_of_globalid_bekend_{count}'
+            count += 1
+    return gpd.GeoDataFrame(structures, geometry='geometry', crs=crs)
 
+
+
+### THIS PART IS ONLY NEEDED TO ADD FUNCTIONS TO ALREADY LOADED network OBJECT ###
 network_backup = pickle.load(open(str(ribasim_network_pickle), 'rb'))
 network.__dict__['get_downstream_objects_on_path_for_nodes'] = get_downstream_objects_on_path_for_nodes
 network.__dict__['get_all_structures'] = get_all_structures
+#########
 
 
 
-network.get_downstream_objects_on_path_for_nodes()
+
+# get downstream objects. information will be added to nodes gdf so also save the results to nodes gdf
+network.nodes_gdf = network.get_downstream_objects_on_path_for_nodes()
 
 
+
+### THIS PART IS USED TO TRANSFORM INFORMATION IN nodes_updates TO EXPORTABLE GEOPACKAGE SO
+### WE CAN CHECK THE RESULTS IN GIS ###
+for i, row in network.nodes_gdf.iterrows():
+    if not pd.isnull(row['downstream_structures']):
+        xx = 2
+
+network.export_to_geopackage(simulation_code=simulation_code)
 
 
 
