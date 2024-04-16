@@ -1,6 +1,6 @@
 """
 Generate overview of downstream objects per object in each basin
-Use WS Dommel for testing
+Use WS Brabantse Delta for testing
 """
 
 import sys
@@ -21,9 +21,9 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # Settings #
 # define network name, base dir
-network_name               = "DeDommel"
+network_name               = "BrabantseDelta"
 source_type                = "hydamo"
-base_dir                   = Path("c:/Projecten/51017989_TKI-NHI-oppervlaktewatermodule_-_Modelgenerator/Ribasim modeldata/DeDommel/verwerkt")
+base_dir                   = Path("c:/Projecten/51017989_TKI-NHI-oppervlaktewatermodule_-_Modelgenerator/Ribasim modeldata/BrabantseDelta/verwerkt")
 # areas (discharge units: afwaterende eenheden)
 areas_file                 = Path(base_dir, "3_input", "areas.gpkg")
 areas_gpkg_layer           = "areas"
@@ -33,14 +33,14 @@ drainage_areas_file        = Path(base_dir, "3_input", "areas.gpkg")
 drainage_areas_gpkg_layer  = "drainage_areas"
 # HyDAMO data
 hydamo_network_file        = Path(base_dir, "4_ribasim", "hydamo.gpkg")
-hydamo_split_network_dx    = 100.0  # split up hydamo hydroobjects in sections of approximate 100 m. Use None to don't split
+hydamo_split_network_dx    = 100.0  # split up hydamo hydroobjects in sections of approximate 25 m. Use None to don't split
 # Ribasim input
 ribasim_input_boundary_file              = Path(base_dir, "3_input", "ribasim_input.gpkg")
 ribasim_input_boundary_gpkg_layer        = 'boundaries'
 ribasim_input_split_nodes_file           = Path(base_dir, "3_input", "ribasim_input.gpkg")
 ribasim_input_split_nodes_gpkg_layer     = "split_nodes"
 # directory results
-results_dir                = Path("results_dommel")
+results_dir                = Path("results_brabantsedelta")
 simulation_code            = "."
 
 
@@ -290,7 +290,7 @@ network.__dict__['get_all_structures'] = get_all_structures
 
 
 # get downstream objects. information will be added to nodes gdf so also save the results to nodes gdf
-network.nodes_gdf = network.get_downstream_objects_on_path_for_nodes()
+network.nodes_gdf = network.get_downstream_objects_on_path_for_nodes(cutoff=15000)
 
 
 
