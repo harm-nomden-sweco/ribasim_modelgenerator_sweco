@@ -4,19 +4,25 @@ import pandas as pd
 import geopandas as gpd
 import networkx as nx
 from shapely.geometry import Point, LineString, Polygon, MultiPolygon, GeometryCollection
+from shapely.ops import linemerge
 
 
 def create_graph_based_on_nodes_edges(
         nodes: gpd.GeoDataFrame, 
         edges: gpd.GeoDataFrame,
+        directional_graph: bool = True,
         add_edge_length_as_weight: bool = False,
-    ) -> nx.DiGraph:
+        print_logmessage: bool = True,
+    ) -> Union[nx.Graph, nx.DiGraph]:
     """
     create networkx graph based on geographic nodes and edges.
+    default a directional graph.
     TODO: maybe a faster implementation possible
     """
-
-    graph = nx.DiGraph()
+    if directional_graph:
+        graph = nx.DiGraph()
+    else:
+        graph = nx.Graph()
     if nodes is not None:
         for i, node in nodes.iterrows():
             graph.add_node(node.node_no, pos=(node.geometry.x, node.geometry.y))
@@ -26,9 +32,10 @@ def create_graph_based_on_nodes_edges(
                 graph.add_edge(edge.from_node, edge.to_node, weight=edge.geometry.length)
             else:
                 graph.add_edge(edge.from_node, edge.to_node)
-    print(
-        f" - create network graph from nodes ({len(nodes)}x) and edges ({len(edges)}x)"
-    )
+    if print_logmessage:
+        print(
+            f" - create network graph from nodes ({len(nodes)}x) and edges ({len(edges)}x)"
+        )
     return graph
 
 
@@ -400,6 +407,7 @@ def create_basin_connections(
         nodes: gpd.GeoDataFrame,
         basins: gpd.GeoDataFrame,
         crs: int = 28992,
+        add_basin_connections_geometry_from_edges: bool = False,
     ) -> gpd.GeoDataFrame:
     """
     create basin connections
@@ -482,6 +490,41 @@ def create_basin_connections(
         geometry='geometry', 
         crs=crs
     )
+
+    if add_basin_connections_geometry_from_edges:
+        print(' - generate basin connections geometry from edges')
+        # make undirectional graph of last updated nodes and edges including length of edges
+        graph = create_graph_based_on_nodes_edges(
+            nodes=nodes, 
+            edges=edges, 
+            directional_graph=False,
+            add_edge_length_as_weight=True,
+            print_logmessage=False
+        )
+        # get node no for split node and basin
+        _basin_connections = basin_connections.copy()
+        _basin_connections['split_node_node_no'] = [split_nodes.loc[split_nodes['split_node'] == n, 'node_no'].values[0]
+                                                    for n in _basin_connections['split_node']]
+        _basin_connections['basin_node_no'] = [basins.loc[basins['basin'] == n, 'node_no'].values[0]
+                                               for n in _basin_connections['basin']]
+        # get shortest paths
+        _basin_connections['paths'] = [nx.dijkstra_path(graph, sn, bn) if c == 'split_node_to_basin' else nx.dijkstra_path(graph, bn, sn)
+                                       for sn, bn, c in zip(_basin_connections['split_node_node_no'], 
+                                                            _basin_connections['basin_node_no'],
+                                                            _basin_connections['connection'])]
+        # transform shortest paths to a continuous line of the edges
+        _edges = edges.copy()
+        _edges['nodes1'] = [f"{n1}_{n2}" for n1, n2 in zip(_edges['from_node'], _edges['to_node'])]
+        _edges['nodes2'] = [f"{n2}_{n1}" for n1, n2 in zip(_edges['from_node'], _edges['to_node'])]
+        _basin_connections['geometry_from_edges'] = [
+            linemerge([_edges.loc[(_edges['nodes1'] == f'{n1}_{n2}') | (_edges['nodes2'] == f'{n1}_{n2}'), 'geometry'].values[0] 
+                       for n1, n2 in zip(p[:-1], p[1:])])
+            for p in _basin_connections['paths']
+        ]
+        basin_connections['geometry_from_edges'] = _basin_connections['geometry_from_edges']
+        
+        # TODO: add check to direction of new line compared to connection type (split node to basin or basin to split node)
+
     print(f" - create connections between Basins and split locations ({len(basin_connections)}x)")
     return basin_connections
 
@@ -908,6 +951,7 @@ def generate_ribasim_network_using_split_nodes(
         split_node_type_conversion: Dict, 
         split_node_id_conversion: Dict,
         crs: int = 28992,
+        add_basin_connections_geometry_from_edges: bool = False,
     ) -> Dict:
     """create basins (nodes) and basin_areas (large polygons) and connections (edges)
     based on nodes, edges, split_nodes and areas (discharge units).
@@ -964,7 +1008,8 @@ def generate_ribasim_network_using_split_nodes(
         basins=basins,
         nodes=nodes,
         edges=edges,
-        crs=crs
+        crs=crs,
+        add_basin_connections_geometry_from_edges=add_basin_connections_geometry_from_edges,
     )
     boundary_connections, split_nodes = create_boundary_connections(
         boundaries=boundaries,

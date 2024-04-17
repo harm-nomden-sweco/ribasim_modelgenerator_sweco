@@ -691,6 +691,7 @@ class RibasimLumpingNetwork(BaseModel):
             use_laterals_for_basin_area: bool = False,
             assign_unassigned_areas_to_basins: bool = True,
             remove_isolated_basins: bool = False,
+            add_basin_connections_geometry_from_edges: bool = False,
         ) -> Dict:
         """
         Generate ribasim_lumping network. This function generates all 
@@ -732,6 +733,7 @@ class RibasimLumpingNetwork(BaseModel):
             split_node_type_conversion=split_node_type_conversion,
             split_node_id_conversion=split_node_id_conversion,
             crs=self.crs,
+            add_basin_connections_geometry_from_edges=add_basin_connections_geometry_from_edges,
         )
         self.basin_areas_gdf = results['basin_areas']
         self.basins_gdf = results['basins']
