@@ -521,9 +521,23 @@ def create_basin_connections(
                        for n1, n2 in zip(p[:-1], p[1:])])
             for p in _basin_connections['paths']
         ]
+        # fix line directions to match with connection type (split node to basin or basin to split node)
+        for i, row in _basin_connections.iterrows():
+            sp = row['split_node_node_no'] if row['connection'] == 'split_node_to_basin' else row['basin_node_no']
+            sp = nodes.loc[nodes['node_no'] == sp, 'geometry'].values[0].buffer(0.0001)
+            if 'LINESTRING' not in str(row['geometry_from_edges']):
+                continue  # skip geometries that are not a line
+            if Point(row['geometry_from_edges'].coords[0]).intersects(sp):
+                # starting point of line matches with desired starting point based on connection type, so leave line as is
+                pass
+            elif Point(row['geometry_from_edges'].coords[-1]).intersects(sp):
+                # last point of line matches with desired starting point based on connection type, so flip direction of line
+                _basin_connections.at[i, 'geometry_from_edges'] = row['geometry_from_edges'].reverse()
+            else:
+                # starting point could not be found on begin or end of line. just leave line as is
+                pass
+        # assign new basin connections lines to original geodataframe
         basin_connections['geometry_from_edges'] = _basin_connections['geometry_from_edges']
-        
-        # TODO: add check to direction of new line compared to connection type (split node to basin or basin to split node)
 
     print(f" - create connections between Basins and split locations ({len(basin_connections)}x)")
     return basin_connections
