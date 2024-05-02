@@ -185,7 +185,10 @@ def check_if_split_node_is_used(
     split_nodes["object_type"] = split_nodes["object_type"].fillna("manual")
     split_nodes["split_type"] = split_nodes["object_type"]
     split_nodes.loc[~split_nodes.status, "split_type"] = "no_split"
-    print(f" - check whether each split location results in a split ({len(split_nodes.loc[~split_nodes['status']])}x not used)")
+    len_no_splits = len(split_nodes.loc[~split_nodes['status']])
+    print(f" - check whether each split location results in a split ({len_no_splits}x not used)")
+    if len_no_splits > 0:
+        print(split_nodes.loc[~split_nodes['status']])
     return split_nodes
 
 
@@ -742,22 +745,22 @@ def regenerate_node_ids(
     nodes["basin_node_id"] = nodes["basin"].replace(mapping_basins_node_id)
     edges["basin_node_id"] = edges["basin"].replace(mapping_basins_node_id)
 
-    # connections = pd.concat([
-    #     basin_connections[["from_node_id", "to_node_id"]], 
-    #     boundary_connections[["from_node_id", "to_node_id"]]
-    # ])
-    # split_nodes = gpd.GeoDataFrame(split_nodes.merge(
-    #     connections.set_index("to_node_id"), 
-    #     how="left", 
-    #     left_on="split_node_node_id", 
-    #     right_index=True
-    # ), geometry="geometry", crs=split_nodes.crs)
-    # split_nodes = gpd.GeoDataFrame(split_nodes.merge(
-    #     connections.set_index("from_node_id"), 
-    #     how="left", 
-    #     left_on="split_node_node_id", 
-    #     right_index=True
-    # ), geometry="geometry", crs=split_nodes.crs)
+    connections = pd.concat([
+        basin_connections[["from_node_id", "to_node_id"]], 
+        boundary_connections[["from_node_id", "to_node_id"]]
+    ])
+    split_nodes = gpd.GeoDataFrame(split_nodes.merge(
+        connections.set_index("to_node_id"), 
+        how="left", 
+        left_on="split_node_node_id", 
+        right_index=True
+    ), geometry="geometry", crs=split_nodes.crs)
+    split_nodes = gpd.GeoDataFrame(split_nodes.merge(
+        connections.set_index("from_node_id"), 
+        how="left", 
+        left_on="split_node_node_id", 
+        right_index=True
+    ), geometry="geometry", crs=split_nodes.crs)
 
     # the above actions can result in duplicate entries in tables. only keep one records of those duplicates
     boundaries = boundaries.loc[~boundaries.duplicated()].copy()
@@ -1001,11 +1004,11 @@ def generate_ribasim_network_using_split_nodes(
         split_node_type_conversion=split_node_type_conversion, 
         split_node_id_conversion=split_node_id_conversion
     )
-    check_basins_connected_to_basin_areas(
-        basins=basins, 
-        basin_areas=basin_areas,
-        boundary_connections=boundary_connections,
-    )
+    # check_basins_connected_to_basin_areas(
+    #     basins=basins, 
+    #     basin_areas=basin_areas,
+    #     boundary_connections=boundary_connections,
+    # )
     return dict(
         basin_areas=basin_areas,
         basins=basins,

@@ -1,24 +1,12 @@
-# RUN THE FOLLOWING COMMANDS
-
-# - open anaconda prompt and navigate to this folder
-# - conda create --name ribasim_lumping python==3.11
-# - activate ribasim_lumping
-# - pip install -r requirements.txt
-# - python -m ipykernel install --user --name=ribasim_lumping
-# - jupyter lab (make sure the kernel 'ribasim_lumping' is selected when running .ipynb
-
-# pip install geopandas==0.14.1 matplotlib==3.8.2 xarray==2023.11.0 ugrid==0.13.0 xugrid==0.7.1 pandera==0.17.2 tomli==2.0.1 tomli_w==1.0.0 networkx==3.2.1 black==23.11.0 openpyxl ipykernel pandas-xlsx-tables==1.0.0 pyarrow==14.0.1
-# ribasim==0.2.0
-# dfm_tools==0.17.0
-
 geopandas==0.14.1
 matplotlib==3.8.2
 xarray==2023.11.0
 ugrid==0.13.0
 xugrid==0.7.1
+dask==2024.4.2
 hydrolib-core==0.6.1
 dfm_tools==0.18.0
-pandera==0.17.2
+pandera==0.18.0
 tomli==2.0.1
 tomli_w==1.0.0
 networkx==3.2.1

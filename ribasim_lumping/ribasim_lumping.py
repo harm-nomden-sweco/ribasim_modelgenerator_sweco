@@ -535,8 +535,8 @@ class RibasimLumpingNetwork(BaseModel):
             gdf_names = ["pump", "weir", "uniweir", "orifice", "culvert", "openwater"]
             gdfs = [self.pumps_gdf, self.weirs_gdf, self.uniweirs_gdf, self.culverts_gdf, None]
         elif "hydamo" in self.basis_source_types:
-            gdf_names = ["gemaal", "sluis", "stuw", "duikersifonhevel", "afsluitmiddel", "openwater"]
-            gdfs = [self.pumps_gdf, self.sluices_gdf, self.weirs_gdf, self.culverts_gdf, self.closers_gdf, None]
+            gdf_names = ["gemaal", "sluis", "stuw", "afsluitmiddel", "duikersifonhevel", "openwater"]
+            gdfs = [self.pumps_gdf, self.sluices_gdf, self.weirs_gdf, self.closers_gdf, self.culverts_gdf, None]
         else:
             raise ValueError("")
         
