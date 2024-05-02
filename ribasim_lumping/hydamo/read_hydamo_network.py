@@ -35,7 +35,8 @@ def add_hydamo_basis_network(
         layer_name="hydroobject", 
         crs=crs, 
         remove_z_dim=True
-    ).rename(columns={'code': 'branch_id'})[['branch_id', 'geometry']]
+    )
+    branches_gdf = branches_gdf.rename(columns={'code': 'branch_id'})[['branch_id', 'geometry']]
     branches_gdf, network_nodes_gdf = generate_nodes_from_edges(branches_gdf)
 
     # Split up hydamo edges with given distance as approximate length of new edges
