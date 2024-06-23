@@ -634,7 +634,7 @@ def create_boundary_connections(
             "basin", "split_node_id", "geometry"]
             if x in waterlevelbnd_conns.columns]
         ].merge(
-.            split_nodes[['split_node_id', 'split_node']], 
+            split_nodes[['split_node_id', 'split_node']], 
             how='left',
             on='split_node_id'
         ).sort_values(['boundary_id', 'basin']).reset_index(drop=True)
