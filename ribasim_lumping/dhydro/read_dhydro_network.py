@@ -329,7 +329,7 @@ def get_dhydro_external_forcing_locations(
     boundaries_gdf = boundaries_gdf.sjoin(find_nearest_nodes(boundaries_gdf, nodes_gdf, "node_no"))
     
     boundaries_gdf = boundaries_gdf.reset_index(drop=True)
-    boundaries_gdf.insert(0, "boundary", boundaries_gdf.index + 1)
+    boundaries_gdf.insert(0, "boundary_id", boundaries_gdf.index + 1)
     boundaries_gdf = boundaries_gdf.rename(columns={"network_node_id": "name"})
     print(f" boundaries ({len(boundaries_gdf)}x)", end="", flush=True)
 

@@ -1,11 +1,10 @@
-# pylint: disable=missing-function-docstring
 import os
 import shutil
 import sys
 from contextlib import closing
 from pathlib import Path
 from sqlite3 import connect
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Tuple
 
 import geopandas as gpd
 import matplotlib
@@ -15,31 +14,27 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import xugrid as xu
+import contextily as cx
 from pydantic import BaseModel
 from shapely.geometry import Point
-import contextily as cx
 
-from .dhydro.read_dhydro_network import \
-    get_dhydro_volume_based_on_basis_simulations
-from .dhydro.read_dhydro_simulations import (add_dhydro_basis_network,
-                                             add_dhydro_simulation_data)
+from .utils.general_functions import (
+    read_geom_file, 
+    snap_to_network, 
+    split_edges_by_split_nodes,
+    log_and_remove_duplicate_geoms,
+    assign_unassigned_areas_to_basin_areas
+)
+from .dhydro.read_dhydro_simulations import add_dhydro_basis_network, add_dhydro_simulation_data
 from .hydamo.read_hydamo_network import add_hydamo_basis_network
-from .ribasim_model_generator.generate_ribasim_model import \
-    generate_ribasim_model
-from .ribasim_model_generator.generate_ribasim_model_preprocessing import \
-    preprocessing_ribasim_model_tables
-from .ribasim_model_generator.generate_ribasim_model_tables import \
-    generate_ribasim_model_tables
+from .ribasim_network_generator.generate_split_nodes import add_split_nodes_based_on_selection
+from .ribasim_network_generator.generate_ribasim_network import generate_ribasim_network_using_split_nodes
+from .ribasim_network_generator.export_load_split_nodes import write_structures_to_excel, read_structures_from_excel
+from .ribasim_model_generator.generate_ribasim_model import generate_ribasim_model
+from .ribasim_model_generator.generate_ribasim_model_preprocessing import preprocessing_ribasim_model_tables
+from .ribasim_model_generator.generate_ribasim_model_tables import generate_ribasim_model_tables
 from .ribasim_model_results.ribasim_results import read_ribasim_model_results
-from .ribasim_network_generator.export_load_split_nodes import (
-    read_structures_from_excel, write_structures_to_excel)
-from .ribasim_network_generator.generate_ribasim_network import \
-    generate_ribasim_network_using_split_nodes
-from .ribasim_network_generator.generate_split_nodes import \
-    add_split_nodes_based_on_selection
-from .utils.general_functions import find_file_in_directory
 
-sys.path.append("..\\..\\..\\ribasim\\python\\ribasim")
 import ribasim
 
 
@@ -47,13 +42,13 @@ class RibasimLumpingNetwork(BaseModel):
     """class to select datapoints from different simulations at certain timestamps"""
     name: str
     base_dir: Path
-    dhydro_basis_dir: Path = None
-    dhydro_results_dir: Path = None
-    hydamo_basis_dir: Path = None
-    results_dir: Path = "results"
+    results_dir: Path
     path_ribasim_executable: Path = None
-    areas_gdf: gpd.GeoDataFrame = None
-    discharge_areas_gdf: gpd.GeoDataFrame = None
+    dhydro_basis_dir: Path = None,
+    dhydro_results_dir: Path = None,
+    areas_gdf:gpd.GeoDataFrame = None
+    drainage_areas_gdf: gpd.GeoDataFrame = None
+    supply_areas_gdf: gpd.GeoDataFrame = None
     his_data: xu.UgridDataset = None
     map_data: xu.UgridDataset = None
     network_data: xr.Dataset = None
@@ -66,11 +61,14 @@ class RibasimLumpingNetwork(BaseModel):
     structures_gdf: gpd.GeoDataFrame = None
     stations_gdf: gpd.GeoDataFrame = None
     pumps_gdf: gpd.GeoDataFrame = None
+    pumps_df: pd.DataFrame = None
     weirs_gdf: gpd.GeoDataFrame = None
     orifices_gdf: gpd.GeoDataFrame = None
     bridges_gdf: gpd.GeoDataFrame = None
     culverts_gdf: gpd.GeoDataFrame = None
     uniweirs_gdf: gpd.GeoDataFrame = None
+    sluices_gdf: gpd.GeoDataFrame = None
+    closers_gdf: gpd.GeoDataFrame = None
     boundaries_gdf: gpd.GeoDataFrame = None
     boundaries_data: pd.DataFrame = None
     boundaries_timeseries_data: pd.DataFrame = None
@@ -83,8 +81,6 @@ class RibasimLumpingNetwork(BaseModel):
     split_nodes: gpd.GeoDataFrame = None
     basin_connections_gdf: gpd.GeoDataFrame = None
     boundary_connections_gdf: gpd.GeoDataFrame = None
-    split_node_type_conversion: Dict = None
-    split_node_id_conversion: Dict = None
     nodes_h_df: pd.DataFrame = None
     nodes_h_basin_df: pd.DataFrame = None
     nodes_a_df: pd.DataFrame = None
@@ -130,129 +126,95 @@ class RibasimLumpingNetwork(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    def read_areas(self, areas_file_path: Path = None, areas_gpkg_path: Path = None, 
-                   areas_gpkg_layer: str = None, areas_id_column: str = None):
-        if areas_file_path is not None:
-            areas_gdf = gpd.read_file(areas_file_path)
-        elif isinstance(areas_gpkg_path, Path) and isinstance(areas_gpkg_layer, str):
-            areas_gdf = gpd.read_file(areas_gpkg_path, layer=areas_gpkg_layer)
-        else:
-            raise ValueError(' no areas_file_path or areas_gpkg_path+areas_gpkg_layer defined')
-        self.areas_gdf = areas_gdf.rename(columns={areas_id_column: "area_code"})
-        print(f" - areas ({len(areas_gdf)}x)")
-
-    def read_areas_laterals_timeseries(self, areas_laterals_path: Path, sep: str = ',', index_col: int = 0, dayfirst=False):
-        self.laterals_areas_data = pd.read_csv(areas_laterals_path, index_col=index_col, sep=sep, parse_dates=True, dayfirst=dayfirst)
-
-    def read_boundaries_timeseries_data(self, boundaries_timeseries_path: Path, skiprows=0, sep=",", index_col=0):
-        boundary_csv_data = pd.read_csv(
-            boundaries_timeseries_path, 
-            sep=sep,
-            skiprows=skiprows, 
-            index_col=index_col, 
-            parse_dates=True
-        )
-        boundary_csv_data = boundary_csv_data.interpolate()
-        self.boundaries_timeseries_data = boundary_csv_data
-
     def add_basis_network(
-        self, 
-        source_type: str, 
-        model_dir: Path,
-        set_name: str = None, 
-        set_start_month: int = None,
-        set_start_day: int = None,
-        simulation_name: str = None,
-        dhydro_volume_tool_bat_file: Path = None, 
-        dhydro_volume_tool_force: bool = False,
-        dhydro_volume_tool_increment: float = 0.1,
-    ):
+            self, 
+            source_type: str,
+            set_name: str = None,
+            dhydro_model_dir: Path = '.', 
+            dhydro_simulation_name: str = 'default',
+            dhydro_volume_tool_bat_file: Path = '.', 
+            dhydro_volume_tool_force: bool = False,
+            dhydro_volume_tool_increment: float = 0.1,
+            hydamo_network_file: Path = 'network.gpkg',
+            # ribasim_input_boundary_file: Path = 'boundary.gpkg',
+            # ribasim_input_boundary_gpkg_layer: str = 'boundary',
+            # ribasim_input_split_nodes_file: Path = 'split_nodes.gpkg',
+            # ribasim_input_split_nodes_gpkg_layer: Path = 'split_nodes',
+            # hydamo_split_nodes_bufdist: float = 10.0,
+            # hydamo_boundary_bufdist: float = 10.0,
+            hydamo_write_results_to_gpkg: bool = False,
+            hydamo_split_network_dx: float = None,
+        ) -> Tuple[gpd.GeoDataFrame]:
+        """
+        Add (detailed) base network which will used to derive Ribasim network. Source type can either be "dhydro" or
+        "hydamo". 
+        If "dhydro", provide arguments for D-HYDRO volume tool (arguments dhydro_volume_*) and model simulation
+        (model_dir, simulation_name). All necessary information (like boundaries and split nodes) will be derived from
+        the D-HYDRO model data.
+        If "hydamo", provide arguments for paths to files containing network geometries (hydamo_network_file) and
+        in case of geopackage also the layer name (hydamo_network_gpkg_layer). HyDAMO does not contain information for
+        boundaries and split nodes, so these need to be provided additionally as Ribasim input.
+
+        Args:
+            source_type (str):                          Source type of network. Options are "dhydro" or "hydamo"
+            set_name (str):                             Name of set of settings (e.g. summer/winter). Will be ignored in hydamo.
+            dhydro_model_dir (Path):                    Directory path to D-HYDRO model
+            dhydro_simulation_name (str):               Name of D-HYDRO model simulation
+            dhydro_volume_tool_bat_file (Path):         Path to D-HYDRO volume tool batch file
+            dhydro_volume_tool_force (bool):            Set to True to force recalculation of D-HYDRO volume. Use False to read pre-calculated 
+                                                        volume in simulation results
+            dhydro_volume_tool_increment (float):       Increment argument (in m) for D-HYDRO volume tool
+            dhydro_volume_tool_bat_file (Path):         Path to D-HYDRO volume tool batch file
+            hydamo_network_file (str):                  Path to HyDAMO file containing network geometries
+            hydamo_network_gpkg_layer (str):            Layer name of HyDAMO network file in case it is a geopackage
+            ribasim_input_boundary_file (str):          Path to file containing Ribasim input boundary geometries (additionally needed when using HyDAMO data)
+            ribasim_input_boundary_gpkg_layer (str):    Layer name of Ribasim input boundary file in case it is a geopackage
+            ribasim_input_split_nodes_file (str):       Path to file containing Ribasim input split nodes geometries (additionally needed when using HyDAMO data)
+            ribasim_input_split_nodes_gpkg_layer (str): Layer name of Ribasim input split nodes file in case it is a geopackage
+            hydamo_split_nodes_bufdist (float):         Buffer distance (in meter) to snap split nodes to HyDAMO network
+            hydamo_boundary_bufdist (float):            Buffer distance (in meter) to snap boundaries to HyDAMO network start/end nodes
+            hydamo_write_results_to_gpkg (bool):        Write intermediate (HyDAMO) results (split nodes, edges, nodes, boundaries) to geopackages
+            hydamo_split_network_dx (float):            Distance (in meter) to split up hydamo network (hydroobjects) into smaller sections. Default None
+                                                        meaning no splitting is performed. The actual lengths of splitted sections will be close to given distance
+                                                        but not exactly the same to prevent generating very small sections
+
+        Returns:
+            gpd.Geo:                                    Network
+        """
         results = None
         if source_type == "dhydro":
+            if set_name is None or not isinstance(set_name, str):
+                raise ValueError("set_name for dhydro should be a string")
             results = add_dhydro_basis_network(
                 set_name=set_name,
-                model_dir=model_dir, 
-                simulation_name=simulation_name,
+                model_dir=dhydro_model_dir,
+                simulation_name=dhydro_simulation_name,
                 volume_tool_bat_file=dhydro_volume_tool_bat_file, 
                 volume_tool_force=dhydro_volume_tool_force,
                 volume_tool_increment=dhydro_volume_tool_increment
             )
-        elif source_type == "hydamo":
-            results = add_hydamo_basis_network(
-                hydamo_basis_dir=model_dir, 
-            )
+            self.basis_model_dirs.append(dhydro_model_dir)
+            self.basis_simulations_names.append(dhydro_simulation_name)
+            if results is not None:
+                self.network_data, self.branches_gdf, self.network_nodes_gdf, self.edges_gdf, \
+                    self.nodes_gdf, self.boundaries_gdf, self.laterals_gdf, self.weirs_gdf, \
+                    self.uniweirs_gdf, self.pumps_gdf, self.orifices_gdf, self.bridges_gdf, \
+                    self.culverts_gdf, self.boundaries_data, self.laterals_data, self.volume_data = results
         
+        elif source_type == 'hydamo':
+            # add network from HyDAMO files
+            results = add_hydamo_basis_network(
+                hydamo_network_file=hydamo_network_file,
+                hydamo_split_network_dx=hydamo_split_network_dx
+            )
+            if results is not None:
+                self.branches_gdf, self.network_nodes_gdf, self.edges_gdf, self.nodes_gdf, \
+                    self.weirs_gdf, self.culverts_gdf, self.pumps_gdf, \
+                    self.pumps_df, self.sluices_gdf, self.closers_gdf = results
+            
         self.basis_source_types.append(source_type)
-        self.basis_set_names.append(set_name)
-        self.basis_set_start_months.append(set_start_month)
-        self.basis_set_start_days.append(set_start_day)
-        self.basis_model_dirs.append(model_dir)
-        self.basis_simulations_names.append(simulation_name)
 
-        if results is not None:
-            self.network_data, self.branches_gdf, self.network_nodes_gdf, self.edges_gdf, \
-                self.nodes_gdf, self.boundaries_gdf, self.laterals_gdf, \
-                weirs_gdf, uniweirs_gdf, pumps_gdf, \
-                orifices_gdf, self.bridges_gdf, self.culverts_gdf, \
-                self.boundaries_data, self.laterals_data, self.volume_data = results
-            if pumps_gdf is not None:
-                if self.pumps_gdf is None:
-                    self.pumps_gdf = pumps_gdf.copy()
-                else:
-                    self.pumps_gdf = gpd.GeoDataFrame(
-                        self.pumps_gdf.drop(columns=['geometry']).merge(
-                            pumps_gdf[[set_name, 'geometry']], 
-                            how='outer', 
-                            left_index=True,
-                            right_index=True
-                        ),
-                        geometry="geometry",
-                        crs=pumps_gdf.crs
-                    )
-            if weirs_gdf is not None:
-                if self.weirs_gdf is None:
-                    self.weirs_gdf = weirs_gdf.copy()
-                else:
-                    self.weirs_gdf = gpd.GeoDataFrame(
-                        self.weirs_gdf.drop(columns=['geometry']).merge(
-                            weirs_gdf[[set_name, 'geometry']], 
-                            how='outer', 
-                            left_index=True,
-                            right_index=True
-                        ),
-                        geometry="geometry",
-                        crs=pumps_gdf.crs
-                    )
-            if uniweirs_gdf is not None:
-                if self.uniweirs_gdf is None:
-                    self.uniweirs_gdf = uniweirs_gdf.copy()
-                else:
-                    self.uniweirs_gdf = gpd.GeoDataFrame(
-                        self.uniweirs_gdf.drop(columns=['geometry']).merge(
-                            uniweirs_gdf[[set_name, 'geometry']], 
-                            how='outer', 
-                            left_index=True,
-                            right_index=True
-                        ),
-                        geometry="geometry",
-                        crs=pumps_gdf.crs
-                    )
-            if orifices_gdf is not None:
-                if self.orifices_gdf is None:
-                    self.orifices_gdf = orifices_gdf.copy()
-                else:
-                    self.orifices_gdf = gpd.GeoDataFrame(
-                        self.orifices_gdf.drop(columns=['geometry']).merge(
-                            orifices_gdf[[set_name, 'geometry']], 
-                            how='outer', 
-                            left_index=True,
-                            right_index=True
-                        ),
-                        geometry="geometry",
-                        crs=pumps_gdf.crs
-                    )
         return results
-
 
     def add_simulation_set(
         self,
@@ -279,8 +241,164 @@ class RibasimLumpingNetwork(BaseModel):
         else:
             print(f"  x for this source type ({source_type}) no model type is added")
         return self.his_data, self.map_data
+        
+    def add_areas_from_file(
+            self, 
+            areas_file_path: Path, 
+            areas_code_column: str = None, 
+            layer_name: str = None, 
+            crs: int = 28992
+        ):
+        """
+        Add discharge unit areas (e.g. "afwateringseenheden") from file. In case of geopackage, provide layer_name.
+        Overwrites previously defined areas
 
+        Args:
+            areas_file_path (Path):     Path to file containing areas geometries
+            areas_code_column (str):    (optional) Id column for areas. If not provided, first column will be used for id
+            layer_name (str):           Layer name in geopackage. Needed when file is a geopackage
+            crs (int):                  (optional) CRS EPSG code. Default 28992 (RD New) 
+        """
+        print('Reading areas from file...')
+        areas_gdf = read_geom_file(
+            filepath=areas_file_path, 
+            layer_name=layer_name, 
+            crs=crs,
+            explode_geoms=False,
+        )
+        areas_code_column = areas_code_column if areas_code_column is not None else list(areas_gdf.columns)[0]
+        self.areas_gdf = areas_gdf[[areas_code_column, "geometry"]]
+        self.areas_gdf.rename(columns={areas_code_column: 'area_code'}, inplace=True)
+        print(f" - areas ({len(self.areas_gdf)}x)")
+    
+    def add_drainage_areas_from_file(
+            self, 
+            drainage_areas_file_path: Path,
+            layer_name: str = None, 
+            crs: int = 28992
+        ):
+        """
+        Add drainage areas (e.g. "afvoergebieden") from file. In case of geopackage, provide layer_name.
+        Overwrites previously defined drainage areas
 
+        Args:
+            drainage_areas_file_path (Path):    Path to file containing supply areas geometries
+            layer_name (str):                   Layer name in geopackage. Needed when file is a geopackage
+            crs (int):                          (optional) CRS EPSG code. Default 28992 (RD New) 
+        """
+        print('Reading drainage areas from file...')
+        self.drainage_areas_gdf = read_geom_file(
+            filepath=drainage_areas_file_path, 
+            layer_name=layer_name, 
+            crs=crs
+        )
+        print(f" - drainage areas ({len(self.drainage_areas_gdf) if self.drainage_areas_gdf is not None else 0}x)")
+
+    def add_supply_areas_from_file(
+            self, 
+            supply_areas_file_path: Path,
+            layer_name: str = None, 
+            crs: int = 28992
+        ):
+        """
+        Add supply areas (e.g. "afvoergebieden") from file. In case of geopackage, provide layer_name.
+        Overwrites previously defined supply areas
+
+        Args:
+            supply_areas_file_path (Path):      Path to file containing supply areas geometries
+            layer_name (str):                   Layer name in geopackage. Needed when file is a geopackage
+            crs (int):                          (optional) CRS EPSG code. Default 28992 (RD New) 
+        """
+        print('Reading supply areas from file...')
+        self.supply_areas_gdf = read_geom_file(
+            filepath=supply_areas_file_path, 
+            layer_name=layer_name, 
+            crs=crs
+        )
+        print(f" - supply areas ({len(self.supply_areas_gdf)}x)")
+    
+    def add_boundaries_from_file(
+            self, 
+            boundary_file_path: Path,
+            layer_name: str = None,
+            crs: int = 28992,
+            buffer_distance: float = 10.0,
+            min_length_edge: float = 2.0
+        ):
+        """
+        Add Ribasim boundaries from file. In case of geopackage, provide layer_name. 
+        Overwrites previously defined boundaries
+
+        Args:
+            boundary_file_path (Path):  Path to file containing boundary geometries
+            layer_name (str):           Layer name in geopackage. Needed when file is a geopackage
+            crs (int):                  (optional) CRS EPSG code. Default 28992 (RD New)     
+        """
+        print('Reading boundaries from file...')
+        self.boundaries_gdf = read_geom_file(
+            filepath=boundary_file_path, 
+            layer_name=layer_name, 
+            crs=crs,
+            remove_z_dim=True
+        )
+        self.boundaries_gdf = log_and_remove_duplicate_geoms(self.boundaries_gdf, colname='boundary_id')
+
+        # Because the split node and boundary locations won't always nicely match up with HyDAMO network, we need to adjust this
+        # by snapping split nodes and boundaries to network nodes/edges
+        self.boundaries_gdf = snap_to_network(
+            snap_type='boundary',
+            points=self.boundaries_gdf, 
+            edges=self.edges_gdf, 
+            nodes=self.nodes_gdf, 
+            buffer_distance=buffer_distance,
+            min_length_edge=min_length_edge
+        )
+        self.boundaries_gdf["boundary_id"] = self.boundaries_gdf.index + 1
+
+        if 'quantity' in self.boundaries_gdf.columns:
+            self.boundaries_gdf['quantity'] = self.boundaries_gdf['quantity'].replace({'dischargebnd': 'FlowBoundary', 'waterlevelbnd': 'LevelBoundary'})
+        self.boundaries_gdf = self.boundaries_gdf.rename({'quantity': 'boundary_type'})
+        self.boundaries_gdf["boundary_type"] = self.boundaries_gdf["boundary_type"].fillna("LevelBoundary")
+
+        boundaries_not_on_network = self.boundaries_gdf.loc[self.boundaries_gdf['node_no'] == -1]
+        print(f"Remove non-snapped boundaries from dataset ({len(boundaries_not_on_network)})")
+        self.boundaries_gdf = self.boundaries_gdf.loc[[i not in boundaries_not_on_network.index for i in self.boundaries_gdf.index]]
+    
+    
+    def read_areas_laterals_timeseries(
+            self, 
+            areas_laterals_path: Path, 
+            sep: str = ',', 
+            index_col: int = 0, 
+            dayfirst=False
+        ):
+       
+        self.laterals_areas_data = pd.read_csv(
+            areas_laterals_path, 
+            index_col=index_col, 
+            sep=sep, 
+            parse_dates=True, 
+            dayfirst=dayfirst
+        )
+
+    def read_boundaries_timeseries_data(
+            self, 
+            boundaries_timeseries_path: Path, 
+            skiprows=0, 
+            sep=",", 
+            index_col=0
+        ):
+        
+        boundary_csv_data = pd.read_csv(
+            boundaries_timeseries_path, 
+            sep=sep,
+            skiprows=skiprows, 
+            index_col=index_col, 
+            parse_dates=True
+        )
+        boundary_csv_data = boundary_csv_data.interpolate()
+        self.boundaries_timeseries_data = boundary_csv_data
+    
     def export_or_update_all_ribasim_structures_specs(self, structure_specs_dir_path: Path):
         for structure_type in ['pump', 'weir', 'orifice', 'culvert']:
             structure_specs_path = Path(structure_specs_dir_path, f"ribasim_{structure_type}s_specs.xlsx")
@@ -288,7 +406,6 @@ class RibasimLumpingNetwork(BaseModel):
                 structure_type=structure_type,
                 structure_specs_path=structure_specs_path
             )
-
 
     def export_or_update_ribasim_structure_specs(self, structure_type: str, structure_specs_path: Path):
         if structure_type not in ['pump', 'weir', 'orifice', 'culvert']:
@@ -335,22 +452,24 @@ class RibasimLumpingNetwork(BaseModel):
                 gdf[col] = gdf_input[col]
         return gdf
 
-
     def add_split_nodes(
-        self,
-        stations: bool = False,
-        pumps: bool = False,
-        weirs: bool = False,
-        orifices: bool = False,
-        bridges: bool = False,
-        culverts: bool = False,
-        uniweirs: bool = False,
-        edges: bool = False,
-        structures_ids_to_include: List[str] = [],
-        structures_ids_to_exclude: List[str] = [],
-        edge_ids_to_include: List[int] = [],
-        edge_ids_to_exclude: List[int] = [],
-    ) -> gpd.GeoDataFrame:
+            self,
+            stations: bool = False,
+            pumps: bool = False,
+            weirs: bool = False,
+            orifices: bool = False,
+            bridges: bool = False,
+            culverts: bool = False,
+            uniweirs: bool = False,
+            edges: bool = False,
+            structures_ids_to_include: List[str] = [],
+            structures_ids_to_exclude: List[str] = [],
+            edge_ids_to_include: List[int] = [],
+            edge_ids_to_exclude: List[int] = [],
+        ) -> gpd.GeoDataFrame:
+        """
+        Set split nodes geodataframe in network object. Overwrites previously defined split nodes
+        """
         self.split_nodes  = add_split_nodes_based_on_selection(
             stations=stations,
             pumps=pumps,
@@ -376,6 +495,150 @@ class RibasimLumpingNetwork(BaseModel):
             ]
         )
         return self.split_nodes
+    
+    def add_split_nodes_from_file(
+            self, 
+            split_nodes_file_path: Path, 
+            layer_name: str = None, 
+            crs: int = 28992,
+            buffer_distance: float = 10.0,
+            min_length_edge: float = 2.0
+        ):
+        """
+        Add split nodes in network object from file. Overwrites previously defined split nodes
+
+        Args:
+            split_nodes_file_path (Path):   Path to file containing split node geometries
+            layer_name (str):               Layer name in geopackage. Needed when file is a geopackage
+            crs (int):                      (optional) CRS EPSG code. Default 28992 (RD New) 
+        """
+        print('Reading split nodes from file...')
+        split_nodes = read_geom_file(
+            filepath=split_nodes_file_path, 
+            layer_name=layer_name, 
+            crs=crs,
+            remove_z_dim=True    
+        )
+        split_nodes_columns = ["split_node", "split_node_id", "object_type", "object_function", "geometry"]
+        split_nodes = split_nodes.drop(columns=[c for c in split_nodes.columns if c not in split_nodes_columns])
+        split_nodes = log_and_remove_duplicate_geoms(split_nodes, colname='split_node')
+        
+        # check whether new split_nodes without split_type and split_node_id are included.
+        old_split_nodes = split_nodes[(~split_nodes["split_node_id"].isna()) & (split_nodes["object_type"] != "")]
+        new_split_nodes = split_nodes[~((~split_nodes["split_node_id"].isna()) & (split_nodes["object_type"] != ""))]
+
+        if new_split_nodes.empty:
+            self.split_nodes = old_split_nodes
+            if 'split_node' not in self.split_nodes.columns or self.split_nodes.split_node.isna().any():
+                self.split_nodes['split_node'] = self.split_nodes.index
+            return self.split_nodes
+
+        if "dhydro" in self.basis_source_types:
+            gdf_names = ["pump", "weir", "uniweir", "orifice", "culvert", "openwater"]
+            gdfs = [self.pumps_gdf, self.weirs_gdf, self.uniweirs_gdf, self.culverts_gdf, None]
+        elif "hydamo" in self.basis_source_types:
+            gdf_names = ["gemaal", "sluis", "stuw", "afsluitmiddel", "duikersifonhevel", "openwater"]
+            gdfs = [self.pumps_gdf, self.sluices_gdf, self.weirs_gdf, self.closers_gdf, self.culverts_gdf, None]
+        else:
+            raise ValueError("")
+        
+        hydamo_objects = gpd.GeoDataFrame()
+        for gdf_name, gdf in zip(gdf_names, gdfs):
+            if gdf is not None and not gdf.empty:
+                gdf["object_type"] = gdf_name
+                hydamo_objects = pd.concat([hydamo_objects, gdf[["code", "object_type", "geometry"]]])
+
+        hydamo_objects.object_type = pd.Categorical(
+            hydamo_objects.object_type, 
+            categories=gdf_names, 
+            ordered=True
+        )
+        hydamo_objects = hydamo_objects.sort_values('object_type')
+        hydamo_objects_buffer = hydamo_objects[["object_type", "code", "geometry"]].rename(columns={"code": "split_node_id"})
+        hydamo_objects_buffer.geometry = hydamo_objects_buffer.geometry.buffer(0.001)
+
+        new_split_nodes = gpd.sjoin(
+            new_split_nodes[["object_type", "object_function", "geometry"]].rename(columns={'object_type': 'split_node_object_type'}), 
+            hydamo_objects_buffer,
+            how='left'
+        ).drop(columns=["index_right"])
+
+        # check if object_type is provided for split_node to use that in case of duplicates after spatial join
+        dup_new_split_nodes = new_split_nodes.loc[new_split_nodes.index.duplicated(keep=False)]
+        non_dup_new_split_nodes = new_split_nodes.loc[~new_split_nodes.index.duplicated(keep=False)]
+        filtered_dup_new_split_nodes = pd.DataFrame()
+        for i in np.unique(dup_new_split_nodes.index):
+            tmp = dup_new_split_nodes.loc[i]
+            tmp = tmp.loc[[s == o for s, o in zip(tmp['split_node_object_type'], tmp['object_type'])]]
+            if tmp.empty:
+                # this means either that object_type in split_nodes is not equal to joined hydamo object type(s)
+                # just take the first of the joined hydamo objects
+                tmp = dup_new_split_nodes.loc[i].iloc[[0]]
+            else:
+                # in case multiple of the same object type are joined, take the first one
+                tmp = tmp.sort_values('object_type').iloc[[0]]
+            filtered_dup_new_split_nodes = pd.concat([filtered_dup_new_split_nodes, tmp])
+        new_split_nodes = pd.concat([non_dup_new_split_nodes, filtered_dup_new_split_nodes])
+        new_split_nodes.drop(columns=['split_node_object_type'], inplace=True)
+
+        split_nodes = pd.concat([old_split_nodes, new_split_nodes]).sort_values(by=["split_node", "object_type"])
+        split_nodes["object_type"] = split_nodes["object_type"].fillna("openwater")
+
+        non_open_water_no_id = split_nodes[~split_nodes["split_node_id"].isnull()]
+        open_water_no_id = split_nodes[split_nodes["split_node_id"].isnull()]
+        open_water_no_id = gpd.sjoin(
+            open_water_no_id,
+            self.edges_gdf[["edge_id", "edge_no", "from_node", "to_node", "geometry"]],
+            how="left"
+        )
+        open_water_no_id = open_water_no_id.loc[~open_water_no_id.index.duplicated(keep='first')]  # remove duplicate spatial joins
+        open_water_no_id["split_node_id"] = open_water_no_id["edge_id"]
+        split_nodes = pd.concat([non_open_water_no_id, open_water_no_id])
+
+        split_nodes = split_nodes.reset_index(drop=True)
+        split_nodes["split_node"] = split_nodes.index + 1
+
+        split_nodes = log_and_remove_duplicate_geoms(split_nodes, colname='split_node')
+
+        self.split_nodes = split_nodes.copy()
+
+        # Because the split node and boundary locations won't always nicely match up with HyDAMO network, we need to adjust this
+        # by snapping split nodes and boundaries to network nodes/edges
+        self.split_nodes = snap_to_network(
+            snap_type='split_node',
+            points=self.split_nodes, 
+            edges=self.edges_gdf, 
+            nodes=self.nodes_gdf, 
+            buffer_distance=buffer_distance,
+            min_length_edge=min_length_edge
+        )
+        
+        # split edges by split node locations so we end up with an network where split nodes are only located on nodes (and not edges)
+        self.split_nodes, self.edges_gdf, self.nodes_gdf = split_edges_by_split_nodes(
+            self.split_nodes, 
+            self.edges_gdf, 
+            buffer_distance=0.1,  # some small buffer to be sure but should actually not be necessary because of previous snap actions
+        )
+        if 'split_node' not in self.split_nodes.columns or self.split_nodes.split_node.isna().any():
+            self.split_nodes['split_node'] = self.split_nodes.index
+        
+        # remove non-snapped split nodes and boundaries
+        split_nodes_not_on_network = self.split_nodes.loc[
+            (self.split_nodes['edge_no'] == -1) & 
+            (self.split_nodes['node_no'] == -1)
+        ]
+        print(f"Remove non-snapped split nodes from dataset ({len(split_nodes_not_on_network)})")
+        self.split_nodes = self.split_nodes.loc[
+            [i not in split_nodes_not_on_network.index for i in self.split_nodes.index]
+        ]
+        return self.split_nodes
+    
+
+    def set_split_nodes(self, split_nodes_gdf: gpd.GeoDataFrame):
+        """
+        Set split nodes geodataframe in network object. Overwrites previously defined split nodes
+        """
+        self.split_nodes = split_nodes_gdf
 
 
     # def add_hydamo_split_nodes_boundaries(self, model_dir: Path = None, areas_id_column: str = None):
@@ -401,18 +664,19 @@ class RibasimLumpingNetwork(BaseModel):
 
 
     def generate_ribasim_lumping_model(
-        self,
-        simulation_code: str,
-        set_name: str,
-        split_node_type_conversion: Dict,
-        split_node_id_conversion: Dict,
-        starttime: str = None,
-        endtime: str = None,
-    ):
+            self,
+            simulation_code: str,
+            set_name: str,
+            # split_node_type_conversion: Dict,
+            # split_node_id_conversion: Dict,
+            starttime: str = None,
+            endtime: str = None,
+        ):
+        
         self.generate_ribasim_lumping_network(
             simulation_code=simulation_code,
-            split_node_type_conversion=split_node_type_conversion,
-            split_node_id_conversion=split_node_id_conversion,
+            # split_node_type_conversion=split_node_type_conversion,
+            # split_node_id_conversion=split_node_id_conversion,
         )
         ribasim_model = self.generate_ribasim_model_complete(
             set_name=set_name,
@@ -423,19 +687,32 @@ class RibasimLumpingNetwork(BaseModel):
 
 
     def generate_ribasim_lumping_network(
-        self,
-        simulation_code: str,
-        split_node_type_conversion: Dict,
-        split_node_id_conversion: Dict,
-        use_laterals_for_basin_area: bool = False
-    ) -> Dict:
+            self,
+            simulation_code: str,
+            # split_node_type_conversion: Dict,
+            # split_node_id_conversion: Dict,
+            use_laterals_for_basin_area: bool = False,
+            assign_unassigned_areas_to_basins: bool = True,
+            remove_isolated_basins: bool = False,
+        ) -> Dict:
+        """
+        Generate ribasim_lumping network. This function generates all 
+
+        Args:
+            simulation_code (str):              give name for ribasim-simulation
+            split_node_type_conversion (Dict):  dictionary general conversion of object-type to ribasim-type (e.g. weir: TabulatedRatingCurve)
+            split_node_id_conversion (Dict):    dictionary specific conversion of split-node-id to ribasim-type (e.g. KST01234: Outlet)
+            use_laterals_for_basin_area (bool): use standard lateral inflow per second per area applied to basin_areas.
+            remove_isolated_basins (bool):      
+        """
+        # first some checks
         self.simulation_code = simulation_code
         self.simulation_path = Path(self.results_dir, simulation_code)
         if self.split_nodes is None:
-            raise ValueError("no split_nodes defined: use .add_split_nodes()")
+            raise ValueError("no split_nodes defined: use .add_split_nodes(), .add_split_nodes_from_file() or .set_split_nodes()")
         if self.nodes_gdf is None or self.edges_gdf is None:
             raise ValueError(
-                "no nodes and/or edges defined: add d-hydro simulation results"
+                "no nodes and/or edges defined: add d-hydro simulation results or hydamo network"
             )
         if self.areas_gdf is None:
             print("no areas defined, will not generate basin_areas")
@@ -443,8 +720,8 @@ class RibasimLumpingNetwork(BaseModel):
             print(
                 "no boundaries defined, will not generate boundaries and boundaries_basin_connections"
             )
-        self.split_node_type_conversion = split_node_type_conversion
-        self.split_node_id_conversion = split_node_id_conversion
+        # self.split_node_type_conversion = split_node_type_conversion
+        # self.split_node_id_conversion = split_node_id_conversion
 
         results = generate_ribasim_network_using_split_nodes(
             nodes=self.nodes_gdf,
@@ -454,8 +731,9 @@ class RibasimLumpingNetwork(BaseModel):
             boundaries=self.boundaries_gdf,
             laterals=self.laterals_gdf,
             use_laterals_for_basin_area=use_laterals_for_basin_area,
-            split_node_type_conversion=split_node_type_conversion,
-            split_node_id_conversion=split_node_id_conversion,
+            remove_isolated_basins=remove_isolated_basins,
+            # split_node_type_conversion=split_node_type_conversion,
+            # split_node_id_conversion=split_node_id_conversion,
             crs=self.crs,
         )
         self.basin_areas_gdf = results['basin_areas']
@@ -467,6 +745,21 @@ class RibasimLumpingNetwork(BaseModel):
         self.network_graph = results['network_graph']
         self.basin_connections_gdf = results['basin_connections']
         self.boundary_connections_gdf = results['boundary_connections']
+
+        # assign areas to basin areas which have no edge within it so it is not assigned to any basin area
+        # also update the basin and basin area code in edges and nodes
+        if assign_unassigned_areas_to_basins:
+            results = assign_unassigned_areas_to_basin_areas(
+                self.areas_gdf,
+                self.basin_areas_gdf, 
+                self.drainage_areas_gdf,
+                # self.edges_gdf,
+            )
+            self.areas_gdf = results['areas']
+            self.basin_areas_gdf = results['basin_areas']
+            if 'edges' in results.keys():
+                self.edges_gdf = results['edges']
+
         # Export to geopackage
         self.export_to_geopackage(simulation_code=simulation_code)
         return results
@@ -617,7 +910,13 @@ class RibasimLumpingNetwork(BaseModel):
         return ribasim_model
 
 
-    def export_to_geopackage(self, simulation_code: str, results_dir: Union[Path, str] = None):
+    def export_to_geopackage(
+            self, 
+            simulation_code: str, 
+            results_dir: 
+            Union[Path, str] = None
+        ):
+        
         if results_dir is None:
             results_dir = self.results_dir
         results_network_dir = Path(results_dir, simulation_code)
@@ -729,10 +1028,7 @@ class RibasimLumpingNetwork(BaseModel):
         cx.add_basemap(ax, crs=self.areas_gdf.crs)
         return fig, ax
 
-    def export_structures_to_excel(
-        self,
-        results_dir: Union[Path, str] = None,
-    ):
+    def export_structures_to_excel(self, results_dir: Union[Path, str] = None):
         if results_dir is None:
             results_dir = Path(self.results_dir, self.name)
 
@@ -744,16 +1040,13 @@ class RibasimLumpingNetwork(BaseModel):
             culverts=self.culverts_gdf,
             uniweirs=self.uniweirs_gdf,
             split_nodes=self.split_nodes,
-            split_node_type_conversion=self.split_node_type_conversion,
-            split_node_id_conversion=self.split_node_id_conversion,
+            # split_node_type_conversion=self.split_node_type_conversion,
+            # split_node_id_conversion=self.split_node_id_conversion,
             results_dir=results_dir,
         )
 
 
-    def import_structures_from_excel(
-        self,
-        excel_path: Union[Path, str],
-    ):
+    def import_structures_from_excel(self, excel_path: Union[Path, str]):
         (
             structures_excel,
             structures_ids_to_include_as_splitnode,
@@ -763,7 +1056,12 @@ class RibasimLumpingNetwork(BaseModel):
         return structures_ids_to_include_as_splitnode, split_node_id_conversion
 
 
-    def plot_basin_waterlevels_for_basins(self, set_name: str, basin_node_ids: List[int]):
+    def plot_basin_waterlevels_for_basins(
+            self, 
+            set_name: str, 
+            basin_node_ids: 
+            List[int]
+        ):
         """A plot will be generated showing the bed level and waterlevels along node_no (x-axis)
         input selected set_name and basin node_ids"""
         for basin_node_id in basin_node_ids:

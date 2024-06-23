@@ -1,75 +1,91 @@
 from pathlib import Path
-from typing import List, Union
-
-import fiona
+from ..utils.general_functions import read_geom_file, generate_nodes_from_edges, split_edges_by_dx
+from shapely.geometry import LineString, Point
+from typing import Tuple
 import geopandas as gpd
 import pandas as pd
-import xarray as xr
-import xugrid as xu
-
-from .preprocess_hydamo_dataset import (
-    add_basin_code_from_network_to_nodes_and_edges,
-    connect_endpoints_by_buffer, create_graph_based_on_nodes_edges,
-    create_nodes_and_edges_from_hydroobjects, get_outlet_nodes,
-    replace_nodes_perpendicular_on_edges)
-
-
-def read_hydamo_gpkg(hydamo_file: Path, layername: str, object_type: str = None):
-    if object_type is None:
-        object_type = layername
-    hydamo_layers = fiona.listlayers(hydamo_file)
-    if layername in hydamo_layers:
-        data = gpd.read_file(hydamo_file, layer=layername)
-        data['object_type'] = object_type
-        print(f'{object_type} ({len(data)})', end=' ')
-    else:
-        data = None
-        print(f'{object_type} (None)', end=' ')
-    return data
-
-
-def get_edges_nodes_from_hydroobject(hydroobject_gdf):
-    nodes, edges = create_nodes_and_edges_from_hydroobjects(hydroobject_gdf) 
-    return nodes, edges
-
-
-def create_network_from_edges_nodes(nodes, edges):
-    network_graph = create_graph_based_on_nodes_edges(nodes, edges)
-    return network_graph
+import fiona
 
 
 def add_hydamo_basis_network(
-    hydamo_basis_dir,
+    hydamo_network_file: Path = 'network.gpkg',
+    hydamo_split_network_dx: float = None,
     crs: int = 28992,
 ):
-    hydamo_file = Path(hydamo_basis_dir,"hydamo.gpkg")
-    print(f'read data {hydamo_file}')
+    # ) -> Tuple[
+    #     gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, 
+    #     gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, 
+    #     gpd.GeoDataFrame, gpd.GeoDataFrame
+    # ]:
+    """
+    Load network data from HyDAMO files
 
-    hydroobject_gdf = read_hydamo_gpkg(hydamo_file, layername= 'hydroobject')
-
-    weirs_gdf = read_hydamo_gpkg(hydamo_file, layername= 'stuw', object_type='weir')
-    if weirs_gdf is not None:
-        weirs_gdf['structure_id'] = weirs_gdf['code']
-        weirs_gdf=weirs_gdf[['structure_id', 'geometry', 'object_type']]
-    pumps_gdf = read_hydamo_gpkg(hydamo_file, layername= 'gemaal', object_type='pump')
-    if pumps_gdf is not None:
-        pumps_gdf['structure_id'] = pumps_gdf['code']
-        pumps_gdf=pumps_gdf[['structure_id', 'geometry', 'object_type']]
-    culverts_gdf = read_hydamo_gpkg(hydamo_file, layername= 'duikersifonhevel', object_type='culvert')
-    if culverts_gdf is not None:
-        culverts_gdf['structure_id'] = culverts_gdf['code']
-        culverts_gdf=culverts_gdf[['structure_id', 'geometry', 'object_type']]
-    sluices_gdf = read_hydamo_gpkg(hydamo_file, layername= 'sluis', object_type='sluice')
-    if sluices_gdf is not None:
-        sluices_gdf['structure_id'] = sluices_gdf['code']
-        sluices_gdf=sluices_gdf[['structure_id', 'geometry', 'object_type']]
-    discharge_areas_gdf = read_hydamo_gpkg(hydamo_file, layername= 'afvoergebiedaanvoergebied', object_type='discharge_area')
-    if discharge_areas_gdf is not None:
-        discharge_areas_gdf['structure_id'] = discharge_areas_gdf['code']
-        discharge_areas_gdf = discharge_areas_gdf[['structure_id', 'geometry', 'object_type']]
-
-    nodes_gdf, edges_gdf = get_edges_nodes_from_hydroobject(hydroobject_gdf)
+    Args:
+        hydamo_network_file (Path):         Path to file containing network geometries (hydroobjects)
+        hydamo_network_gpkg_layer (str):    Layer name in geopackage. Needed when file is a geopackage
+        crs (int):                          (optional) CRS EPSG code. Default 28992 (RD New)
     
-    return None, None, None, edges_gdf, nodes_gdf, None, None, weirs_gdf, None, \
-        pumps_gdf, None, None, culverts_gdf, None, None, None
+    Returns:
+        Tuple containing GeoDataFrames with branches, edges nodes
+    """
+
+    print('Reading network from HyDAMO files...')
+    branches_gdf = read_geom_file(
+        filepath=hydamo_network_file, 
+        layer_name="hydroobject", 
+        crs=crs, 
+        remove_z_dim=True
+    )
+    branches_gdf = branches_gdf.rename(columns={'code': 'branch_id'})[['branch_id', 'geometry']]
+    branches_gdf, network_nodes_gdf = generate_nodes_from_edges(branches_gdf)
+
+    # Split up hydamo edges with given distance as approximate length of new edges
+    if hydamo_split_network_dx is None:
+        edges_gdf = branches_gdf.copy().rename(columns={"branch_id": "edge_id"})
+    else:
+        edges_gdf = split_edges_by_dx(
+            edges=branches_gdf, 
+            dx=hydamo_split_network_dx,
+        )
+    edges_gdf, nodes_gdf = generate_nodes_from_edges(edges_gdf)
+    edges_gdf.index.name = "index"
+
+    # Read structures and data according to hydamo-format
+    weirs_gdf, culverts_gdf, pumps_gdf, sluices_gdf, closers_gdf = None, None, None, None, None
+    
+    pumps_gdf = read_geom_file(
+        filepath=hydamo_network_file,
+        layer_name="gemaal",
+        crs=crs
+    )
+    sluices_gdf = read_geom_file(
+        filepath=hydamo_network_file,
+        layer_name="sluis",
+        crs=crs
+    )
+    weirs_gdf  = read_geom_file(
+        filepath=hydamo_network_file,
+        layer_name="stuw",
+        crs=crs
+    )
+    culverts_gdf  = read_geom_file(
+        filepath=hydamo_network_file,
+        layer_name="duikersifonhevel",
+        crs=crs
+    )
+    closers_gdf = read_geom_file(
+        filepath=hydamo_network_file,
+        layer_name="afsluitmiddel",
+        crs=crs
+    )
+    if "pomp" in fiona.listlayers(hydamo_network_file):
+        pumps_df = gpd.read_file(hydamo_network_file, layer="pomp")
+    else:
+        pumps_df = None
+    
+    # set column names to lowercase and return
+    results = [branches_gdf, network_nodes_gdf, edges_gdf, nodes_gdf, weirs_gdf, culverts_gdf, pumps_gdf, pumps_df, sluices_gdf, closers_gdf]
+    results = [x.rename(columns={c: c.lower() for c in x.columns}) if x is not None else None 
+               for x in results]
+    return results
 

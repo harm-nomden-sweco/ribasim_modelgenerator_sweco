@@ -453,19 +453,26 @@ def get_outlet_nodes(nodes, edges, crs="EPSG:28992"):
 
 
 def create_graph_based_on_nodes_edges(
-    nodes: gpd.GeoDataFrame, edges: gpd.GeoDataFrame
+    node: gpd.GeoDataFrame,
+    edge: gpd.GeoDataFrame,
+    add_edge_length_as_weight: bool = False,
 ) -> nx.DiGraph:
-    """create networkx graph based on geographic nodes and edges.
-    TODO: maybe a faster implementation possible"""
+    """
+    create networkx graph from ribasim model.
+    input: nodes and edges
+    """
     graph = nx.DiGraph()
-    if nodes is not None:
-        for i, node in nodes.iterrows():
-            graph.add_node(node.node_no, pos=(node.geometry.x, node.geometry.y))
-    if edges is not None:
-        for i, edge in edges.iterrows():
-            graph.add_edge(edge.from_node, edge.to_node)
+    if node is not None:
+        for i, n in node.iterrows():
+            graph.add_node(n.node_id, node_type=n.node_type, pos=(n.geometry.x, n.geometry.y))
+    if edge is not None:
+        for i, e in edge.iterrows():
+            if add_edge_length_as_weight:
+                graph.add_edge(e.from_node_id, e.to_node_id, weight=e.geometry.length)
+            else:
+                graph.add_edge(e.from_node_id, e.to_node_id)
     print(
-        f" - create network graph from nodes ({len(nodes)}) and edges ({len(edges)}x)"
+        f" - create network graph from nodes ({len(node)}x) and edges ({len(edge)}x)"
     )
     return graph
 

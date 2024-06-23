@@ -26,11 +26,15 @@ def generate_basin_static_table(basin_h, basin_a, basins, decimals=3):
     basin_profile = basin_profile[basin_profile['level'].notna()]
     basin_profile["area"] = basin_profile["area"].replace(0.0, 0.001)
     basin_profile = basin_profile.reset_index(drop=True)
+    basin_profile["level_diff"] = basin_profile["level"].diff()
+    
+    for node_id in basin_profile.node_id.unique():
+        basin_profile.loc[(basin_profile['node_id'] == node_id).idxmax(), 'level_diff'] = np.nan
+
     basin_profile = basin_profile[
-        (basin_profile["level"].diff(1) > 0.0001) | 
-        (basin_profile["level"].diff(1).isna())
+        (basin_profile["level_diff"].diff(1) > 0.0001) | (basin_profile["level_diff"].isna())
     ].reset_index(drop=True)
-    return basin_profile
+    return basin_profile.drop(columns=["level_diff"])
 
 
 def generate_basin_time_table_laterals(basins, basin_areas, laterals, laterals_data, saveat):
@@ -281,8 +285,8 @@ def generate_basin_subgrid(basins_nodes_h_relation):
         basin_subgrid.loc[(basin_subgrid['node_id'] == node_id).idxmax(), ['basin_level_diff', 'subgrid_level_diff']] = np.nan
 
     basin_subgrid = basin_subgrid[
-        ((basin_subgrid["basin_level"].diff(1) > 0.0001) | (basin_subgrid["basin_level"].isna())) & 
-        ((basin_subgrid["subgrid_level"].diff(1) > 0.0001) | (basin_subgrid["subgrid_level"].isna()))
+        ((basin_subgrid["basin_level_diff"].diff(1) > 0.0001) | (basin_subgrid["basin_level_diff"].isna())) & 
+        ((basin_subgrid["subgrid_level_diff"].diff(1) > 0.0001) | (basin_subgrid["subgrid_level_diff"].isna()))
     ].reset_index(drop=True)
     return basin_subgrid.drop(columns=["basin_level_diff", "subgrid_level_diff"])
 
