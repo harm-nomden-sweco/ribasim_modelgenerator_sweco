@@ -81,8 +81,6 @@ class RibasimLumpingNetwork(BaseModel):
     split_nodes: gpd.GeoDataFrame = None
     basin_connections_gdf: gpd.GeoDataFrame = None
     boundary_connections_gdf: gpd.GeoDataFrame = None
-    split_node_type_conversion: Dict = None
-    split_node_id_conversion: Dict = None
     nodes_h_df: pd.DataFrame = None
     nodes_h_basin_df: pd.DataFrame = None
     nodes_a_df: pd.DataFrame = None
@@ -324,7 +322,8 @@ class RibasimLumpingNetwork(BaseModel):
             boundary_file_path: Path,
             layer_name: str = None,
             crs: int = 28992,
-            buffer_distance: float = 10.0
+            buffer_distance: float = 10.0,
+            min_length_edge: float = 2.0
         ):
         """
         Add Ribasim boundaries from file. In case of geopackage, provide layer_name. 
@@ -352,13 +351,15 @@ class RibasimLumpingNetwork(BaseModel):
             edges=self.edges_gdf, 
             nodes=self.nodes_gdf, 
             buffer_distance=buffer_distance,
+            min_length_edge=min_length_edge
         )
+        self.boundaries_gdf["boundary_id"] = self.boundaries_gdf.index + 1
 
-        self.boundaries_gdf = self.boundaries_gdf.rename(columns={"boundary_id": "boundary", "type": "quantity"})
         if 'quantity' in self.boundaries_gdf.columns:
-            self.boundaries_gdf['quantity'] = self.boundaries_gdf['quantity'].replace({'FlowBoundary': 'dischargebnd', 'LevelBoundary': 'waterlevelbnd'})
-        else:
-            self.boundaries_gdf['quantity'] = 'waterlevelbnd'  # add default bnd type if not present in gdf
+            self.boundaries_gdf['quantity'] = self.boundaries_gdf['quantity'].replace({'dischargebnd': 'FlowBoundary', 'waterlevelbnd': 'LevelBoundary'})
+        self.boundaries_gdf = self.boundaries_gdf.rename({'quantity': 'boundary_type'})
+        self.boundaries_gdf["boundary_type"] = self.boundaries_gdf["boundary_type"].fillna("LevelBoundary")
+
         boundaries_not_on_network = self.boundaries_gdf.loc[self.boundaries_gdf['node_no'] == -1]
         print(f"Remove non-snapped boundaries from dataset ({len(boundaries_not_on_network)})")
         self.boundaries_gdf = self.boundaries_gdf.loc[[i not in boundaries_not_on_network.index for i in self.boundaries_gdf.index]]
@@ -500,7 +501,8 @@ class RibasimLumpingNetwork(BaseModel):
             split_nodes_file_path: Path, 
             layer_name: str = None, 
             crs: int = 28992,
-            buffer_distance: float = 10.0
+            buffer_distance: float = 10.0,
+            min_length_edge: float = 2.0
         ):
         """
         Add split nodes in network object from file. Overwrites previously defined split nodes
@@ -556,7 +558,7 @@ class RibasimLumpingNetwork(BaseModel):
         hydamo_objects_buffer.geometry = hydamo_objects_buffer.geometry.buffer(0.001)
 
         new_split_nodes = gpd.sjoin(
-            new_split_nodes[["object_type", "geometry"]].rename(columns={'object_type': 'split_node_object_type'}), 
+            new_split_nodes[["object_type", "object_function", "geometry"]].rename(columns={'object_type': 'split_node_object_type'}), 
             hydamo_objects_buffer,
             how='left'
         ).drop(columns=["index_right"])
@@ -608,6 +610,7 @@ class RibasimLumpingNetwork(BaseModel):
             edges=self.edges_gdf, 
             nodes=self.nodes_gdf, 
             buffer_distance=buffer_distance,
+            min_length_edge=min_length_edge
         )
         
         # split edges by split node locations so we end up with an network where split nodes are only located on nodes (and not edges)
@@ -664,16 +667,16 @@ class RibasimLumpingNetwork(BaseModel):
             self,
             simulation_code: str,
             set_name: str,
-            split_node_type_conversion: Dict,
-            split_node_id_conversion: Dict,
+            # split_node_type_conversion: Dict,
+            # split_node_id_conversion: Dict,
             starttime: str = None,
             endtime: str = None,
         ):
         
         self.generate_ribasim_lumping_network(
             simulation_code=simulation_code,
-            split_node_type_conversion=split_node_type_conversion,
-            split_node_id_conversion=split_node_id_conversion,
+            # split_node_type_conversion=split_node_type_conversion,
+            # split_node_id_conversion=split_node_id_conversion,
         )
         ribasim_model = self.generate_ribasim_model_complete(
             set_name=set_name,
@@ -686,8 +689,8 @@ class RibasimLumpingNetwork(BaseModel):
     def generate_ribasim_lumping_network(
             self,
             simulation_code: str,
-            split_node_type_conversion: Dict,
-            split_node_id_conversion: Dict,
+            # split_node_type_conversion: Dict,
+            # split_node_id_conversion: Dict,
             use_laterals_for_basin_area: bool = False,
             assign_unassigned_areas_to_basins: bool = True,
             remove_isolated_basins: bool = False,
@@ -717,8 +720,8 @@ class RibasimLumpingNetwork(BaseModel):
             print(
                 "no boundaries defined, will not generate boundaries and boundaries_basin_connections"
             )
-        self.split_node_type_conversion = split_node_type_conversion
-        self.split_node_id_conversion = split_node_id_conversion
+        # self.split_node_type_conversion = split_node_type_conversion
+        # self.split_node_id_conversion = split_node_id_conversion
 
         results = generate_ribasim_network_using_split_nodes(
             nodes=self.nodes_gdf,
@@ -729,8 +732,8 @@ class RibasimLumpingNetwork(BaseModel):
             laterals=self.laterals_gdf,
             use_laterals_for_basin_area=use_laterals_for_basin_area,
             remove_isolated_basins=remove_isolated_basins,
-            split_node_type_conversion=split_node_type_conversion,
-            split_node_id_conversion=split_node_id_conversion,
+            # split_node_type_conversion=split_node_type_conversion,
+            # split_node_id_conversion=split_node_id_conversion,
             crs=self.crs,
         )
         self.basin_areas_gdf = results['basin_areas']
@@ -1037,8 +1040,8 @@ class RibasimLumpingNetwork(BaseModel):
             culverts=self.culverts_gdf,
             uniweirs=self.uniweirs_gdf,
             split_nodes=self.split_nodes,
-            split_node_type_conversion=self.split_node_type_conversion,
-            split_node_id_conversion=self.split_node_id_conversion,
+            # split_node_type_conversion=self.split_node_type_conversion,
+            # split_node_id_conversion=self.split_node_id_conversion,
             results_dir=results_dir,
         )
 

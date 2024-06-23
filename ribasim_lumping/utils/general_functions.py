@@ -9,7 +9,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import nearest_points, snap
 
 
@@ -343,7 +343,8 @@ def snap_to_network(
         points: gpd.GeoDataFrame, 
         edges: gpd.GeoDataFrame = None,
         nodes: gpd.GeoDataFrame = None,
-        buffer_distance: float = 0.5
+        buffer_distance: float = 0.5,
+        min_length_edge: float = 2.0
     ) -> gpd.GeoDataFrame:
     """
     Snap point geometries to network based on type and within buffer distance
@@ -351,7 +352,7 @@ def snap_to_network(
     Parameters
     ----------
     snap_type : str
-        Snap type which control how geometries will be snapped to network. Can either be "split_node" or "boundary".
+        Snap type which control how geometries will be snapped to network. Can either be "split_node" or "boundary_id".
     points : gpd.GeoDataFrame
         Point feature dataset containing points to be snapped
     edges : gpd.GeoDataFrame
@@ -375,6 +376,7 @@ def snap_to_network(
             edges_bufdist=buffer_distance,
             nodes_bufdist=buffer_distance * 0.1,
             n_edges_to_node_limit=3,
+            min_length_edge=min_length_edge
         )
         # get node no or edge no on which point is located
         points = get_node_no_and_edge_no_for_points(points, edges=edges, nodes=nodes)
@@ -392,6 +394,7 @@ def snap_to_network(
             edges=None,   # exclude edges on purpose
             nodes=nodes, 
             nodes_bufdist=buffer_distance,
+            min_length_edge=min_length_edge
         )
         # get node no or edge no on which point is located
         points = get_node_no_and_edge_no_for_points(points, edges=None, nodes=nodes)
@@ -400,10 +403,10 @@ def snap_to_network(
             print(f"The following boundaries could not be snapped to nodes within buffer distance:")
             for i, row in points.iterrows():
                 if row['node_no'] == -1:
-                    print(f"  Boundary {row['boundary_id']} - {row['boundary_naam']}")
+                    print(f"  Boundary {row['boundary_id']} - {row['boundary_name']}")
         return points
     else:
-        raise ValueError('Invalid snap_type. Can either be "split_node" or "boundary"')
+        raise ValueError('Invalid snap_type. Can either be "split_node" or "boundary_id"')
 
 
 def snap_points_to_nodes_and_edges(
@@ -413,6 +416,7 @@ def snap_points_to_nodes_and_edges(
         edges_bufdist: float = 0.5,
         nodes_bufdist: float = 0.5,
         n_edges_to_node_limit: int = 1e10,
+        min_length_edge: float = 2.0
     ) -> gpd.GeoDataFrame:
     """
     Snap point geometries to network based on type and within buffer distance
@@ -481,7 +485,7 @@ def snap_points_to_nodes_and_edges(
             # if no edge is within point combined with buffer distance, skip
             lines = edges.geometry.values[edges.geometry.intersects(point.buffer(edges_bufdist))]
             # also skip if line is shorter than 2 m
-            lines = lines[[l.length > 2 for l in lines]]
+            lines = lines[[l.length > min_length_edge for l in lines]]
             if len(lines) == 0:
                 continue
             # project node onto edge but make sure resulting point is some distance (0.5 meter) from start/end node of edge
@@ -939,3 +943,31 @@ def assign_unassigned_areas_to_basin_areas(
     print(f" - updated basin areas and areas")
 
     return to_return
+
+
+def remove_holes_from_polygons(gdf, min_area):
+    """
+    Remove holes from polygons that have smalle smaller area than min_area 
+    
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        Polygons as geometry
+    min_area: float
+        Maximum area of holes to be removed
+        
+    Returns
+    -------
+    GeoDataFrame with polygons where the holes are removed
+    """
+    list_geometry = []
+    for polygon in gdf.geometry:
+        list_interiors = []
+        for interior in polygon.interiors:
+            p = Polygon(interior)
+            if p.area > min_area:
+                list_interiors.append(interior)
+        temp_pol = Polygon(polygon.exterior.coords, holes=list_interiors)
+        list_geometry.append(temp_pol)
+    gdf.geometry = list_geometry
+    return gdf
