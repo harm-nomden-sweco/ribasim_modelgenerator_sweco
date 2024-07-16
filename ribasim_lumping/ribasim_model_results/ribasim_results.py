@@ -4,7 +4,7 @@ import sys
 import warnings
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import pandas as pd
 import geopandas as gpd
 
@@ -17,7 +17,8 @@ import ribasim
 
 
 class RibasimModelResults(BaseModel):    
-    # model: ribasim.Model
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     simulation_path: Path
     ribasim_model: ribasim.Model
     node_h: pd.DataFrame
@@ -31,11 +32,10 @@ class RibasimModelResults(BaseModel):
     subgrid: Optional[pd.DataFrame] = None
     basin_areas: gpd.GeoDataFrame = None
 
-    class Config:
-        arbitrary_types_allowed = True
-
 
 class RibasimBasinResults(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     ribasim_model: ribasim.Model
     basin_no: int
     basin: pd.DataFrame
@@ -48,9 +48,6 @@ class RibasimBasinResults(BaseModel):
     inflow: Optional[pd.DataFrame] = None
     outflow: Optional[pd.DataFrame] = None
     subgrid: Optional[pd.DataFrame] = None
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 def read_arrow_file(simulation_dir: Path, file_name: str, results_dir: str = "results"):

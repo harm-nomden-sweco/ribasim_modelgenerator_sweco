@@ -28,8 +28,6 @@ def add_hydamo_basis_network(
     Returns:
         Tuple containing GeoDataFrames with branches, edges nodes
     """
-
-    print('Reading network from HyDAMO files...')
     branches_gdf = read_geom_file(
         filepath=hydamo_network_file, 
         layer_name="hydroobject", 
@@ -38,6 +36,7 @@ def add_hydamo_basis_network(
     )
     branches_gdf = branches_gdf.rename(columns={'code': 'branch_id'})[['branch_id', 'geometry']]
     branches_gdf, network_nodes_gdf = generate_nodes_from_edges(branches_gdf)
+    print(f" - branches ({len(branches_gdf)}x)", end=', ')
 
     # Split up hydamo edges with given distance as approximate length of new edges
     if hydamo_split_network_dx is None:
@@ -49,6 +48,7 @@ def add_hydamo_basis_network(
         )
     edges_gdf, nodes_gdf = generate_nodes_from_edges(edges_gdf)
     edges_gdf.index.name = "index"
+    print(f" edges ({len(edges_gdf) if edges_gdf is not None else 0}x)", end=', ')
 
     # Read structures and data according to hydamo-format
     weirs_gdf, culverts_gdf, pumps_gdf, sluices_gdf, closers_gdf = None, None, None, None, None
@@ -58,26 +58,36 @@ def add_hydamo_basis_network(
         layer_name="gemaal",
         crs=crs
     )
+    print(f" pumps ({len(pumps_gdf) if pumps_gdf is not None else 0}x)", end=', ')
+
     sluices_gdf = read_geom_file(
         filepath=hydamo_network_file,
         layer_name="sluis",
         crs=crs
     )
+    print(f"sluices ({len(sluices_gdf) if sluices_gdf is not None else 0}x)", end=', ')
+
     weirs_gdf  = read_geom_file(
         filepath=hydamo_network_file,
         layer_name="stuw",
         crs=crs
     )
+    print(f"weirs ({len(weirs_gdf) if weirs_gdf is not None else 0}x)", end=', ')
+
     culverts_gdf  = read_geom_file(
         filepath=hydamo_network_file,
         layer_name="duikersifonhevel",
         crs=crs
     )
+    print(f"culverts ({len(culverts_gdf) if culverts_gdf is not None else 0}x)", end=', ')
+
     closers_gdf = read_geom_file(
         filepath=hydamo_network_file,
         layer_name="afsluitmiddel",
         crs=crs
     )
+    print(f"closers ({len(closers_gdf) if closers_gdf is not None else 0}x)")
+
     if "pomp" in fiona.listlayers(hydamo_network_file):
         pumps_df = gpd.read_file(hydamo_network_file, layer="pomp")
     else:

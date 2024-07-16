@@ -15,7 +15,7 @@ import pandas as pd
 import xarray as xr
 import xugrid as xu
 import contextily as cx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from shapely.geometry import Point
 
 from .utils.general_functions import (
@@ -39,7 +39,8 @@ import ribasim
 
 
 class RibasimLumpingNetwork(BaseModel):
-    """class to select datapoints from different simulations at certain timestamps"""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     name: str
     base_dir: Path
     results_dir: Path
@@ -123,9 +124,6 @@ class RibasimLumpingNetwork(BaseModel):
     simulations_ts: List[Union[List, pd.DatetimeIndex]] = []
     crs: int = 28992
 
-    class Config:
-        arbitrary_types_allowed = True
-
     def add_basis_network(
             self, 
             source_type: str,
@@ -183,6 +181,7 @@ class RibasimLumpingNetwork(BaseModel):
         """
         results = None
         if source_type == "dhydro":
+            print(f'Network {self.name} - Analysis D-HYDRO model')
             if set_name is None or not isinstance(set_name, str):
                 raise ValueError("set_name for dhydro should be a string")
             results = add_dhydro_basis_network(
@@ -202,6 +201,7 @@ class RibasimLumpingNetwork(BaseModel):
                     self.culverts_gdf, self.boundaries_data, self.laterals_data, self.volume_data = results
         
         elif source_type == 'hydamo':
+            print(f'Network {self.name} - Analysis HyDAMO data')
             # add network from HyDAMO files
             results = add_hydamo_basis_network(
                 hydamo_network_file=hydamo_network_file,
@@ -259,14 +259,19 @@ class RibasimLumpingNetwork(BaseModel):
             layer_name (str):           Layer name in geopackage. Needed when file is a geopackage
             crs (int):                  (optional) CRS EPSG code. Default 28992 (RD New) 
         """
-        print('Reading areas from file...')
+        print(f'Network {self.name} - Analysis Areas')
         areas_gdf = read_geom_file(
             filepath=areas_file_path, 
             layer_name=layer_name, 
             crs=crs,
             explode_geoms=False,
         )
-        areas_code_column = areas_code_column if areas_code_column is not None else list(areas_gdf.columns)[0]
+        if areas_code_column not in areas_gdf.columns:
+            areas_code_column = areas_code_column.lower()
+        if areas_code_column not in areas_gdf.columns:
+            areas_code_column = areas_code_column.upper()
+        if areas_code_column not in areas_gdf.columns:
+            areas_code_column = areas_gdf.columns[0]
         self.areas_gdf = areas_gdf[[areas_code_column, "geometry"]]
         self.areas_gdf.rename(columns={areas_code_column: 'area_code'}, inplace=True)
         print(f" - areas ({len(self.areas_gdf)}x)")
@@ -286,7 +291,7 @@ class RibasimLumpingNetwork(BaseModel):
             layer_name (str):                   Layer name in geopackage. Needed when file is a geopackage
             crs (int):                          (optional) CRS EPSG code. Default 28992 (RD New) 
         """
-        print('Reading drainage areas from file...')
+        print(f'Network {self.name} - Analysis Drainage Areas')
         self.drainage_areas_gdf = read_geom_file(
             filepath=drainage_areas_file_path, 
             layer_name=layer_name, 
@@ -309,7 +314,7 @@ class RibasimLumpingNetwork(BaseModel):
             layer_name (str):                   Layer name in geopackage. Needed when file is a geopackage
             crs (int):                          (optional) CRS EPSG code. Default 28992 (RD New) 
         """
-        print('Reading supply areas from file...')
+        print(f'Network {self.name} - Analysis Supply Areas')
         self.supply_areas_gdf = read_geom_file(
             filepath=supply_areas_file_path, 
             layer_name=layer_name, 
@@ -334,7 +339,7 @@ class RibasimLumpingNetwork(BaseModel):
             layer_name (str):           Layer name in geopackage. Needed when file is a geopackage
             crs (int):                  (optional) CRS EPSG code. Default 28992 (RD New)     
         """
-        print('Reading boundaries from file...')
+        print(f'Network {self.name} - Analysis Boundaries')
         self.boundaries_gdf = read_geom_file(
             filepath=boundary_file_path, 
             layer_name=layer_name, 
@@ -361,7 +366,7 @@ class RibasimLumpingNetwork(BaseModel):
         self.boundaries_gdf["boundary_type"] = self.boundaries_gdf["boundary_type"].fillna("LevelBoundary")
 
         boundaries_not_on_network = self.boundaries_gdf.loc[self.boundaries_gdf['node_no'] == -1]
-        print(f"Remove non-snapped boundaries from dataset ({len(boundaries_not_on_network)})")
+        print(f" - Remove non-snapped boundaries from dataset ({len(boundaries_not_on_network)})")
         self.boundaries_gdf = self.boundaries_gdf.loc[[i not in boundaries_not_on_network.index for i in self.boundaries_gdf.index]]
     
     
@@ -501,7 +506,7 @@ class RibasimLumpingNetwork(BaseModel):
             split_nodes_file_path: Path, 
             layer_name: str = None, 
             crs: int = 28992,
-            buffer_distance: float = 10.0,
+            buffer_distance: float = 2.0,
             min_length_edge: float = 2.0
         ):
         """
@@ -512,7 +517,7 @@ class RibasimLumpingNetwork(BaseModel):
             layer_name (str):               Layer name in geopackage. Needed when file is a geopackage
             crs (int):                      (optional) CRS EPSG code. Default 28992 (RD New) 
         """
-        print('Reading split nodes from file...')
+        print(f'Network {self.name} - Analysis Split Nodes')
         split_nodes = read_geom_file(
             filepath=split_nodes_file_path, 
             layer_name=layer_name, 
@@ -627,7 +632,7 @@ class RibasimLumpingNetwork(BaseModel):
             (self.split_nodes['edge_no'] == -1) & 
             (self.split_nodes['node_no'] == -1)
         ]
-        print(f"Remove non-snapped split nodes from dataset ({len(split_nodes_not_on_network)})")
+        print(f" - Remove non-snapped split nodes from dataset ({len(split_nodes_not_on_network)})")
         self.split_nodes = self.split_nodes.loc[
             [i not in split_nodes_not_on_network.index for i in self.split_nodes.index]
         ]
@@ -689,11 +694,12 @@ class RibasimLumpingNetwork(BaseModel):
     def generate_ribasim_lumping_network(
             self,
             simulation_code: str,
-            # split_node_type_conversion: Dict,
-            # split_node_id_conversion: Dict,
             use_laterals_for_basin_area: bool = False,
             assign_unassigned_areas_to_basins: bool = True,
             remove_isolated_basins: bool = False,
+            include_flow_boundary_basins: bool = True,
+            include_level_boundary_basins: bool = False,
+            remove_holes_min_area: float = 10.0
         ) -> Dict:
         """
         Generate ribasim_lumping network. This function generates all 
@@ -705,6 +711,7 @@ class RibasimLumpingNetwork(BaseModel):
             use_laterals_for_basin_area (bool): use standard lateral inflow per second per area applied to basin_areas.
             remove_isolated_basins (bool):      
         """
+        print(f'Network {self.name} - Generate RIBASIM lumping network')
         # first some checks
         self.simulation_code = simulation_code
         self.simulation_path = Path(self.results_dir, simulation_code)
@@ -732,8 +739,9 @@ class RibasimLumpingNetwork(BaseModel):
             laterals=self.laterals_gdf,
             use_laterals_for_basin_area=use_laterals_for_basin_area,
             remove_isolated_basins=remove_isolated_basins,
-            # split_node_type_conversion=split_node_type_conversion,
-            # split_node_id_conversion=split_node_id_conversion,
+            include_flow_boundary_basins=include_flow_boundary_basins,
+            include_level_boundary_basins=include_level_boundary_basins,
+            remove_holes_min_area=remove_holes_min_area,
             crs=self.crs,
         )
         self.basin_areas_gdf = results['basin_areas']

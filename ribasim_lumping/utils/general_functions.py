@@ -299,6 +299,8 @@ def log_and_remove_duplicate_geoms(gdf: gpd.GeoDataFrame, colname: str = None) -
         for i, row in gdf.iterrows():
             tmp2 = tmp.loc[tmp.geometry.values == row.geometry]
             if not tmp2.empty:
+                print(tmp)
+                print(tmp2)
                 print(f"  Duplicate geometries found for {colname}: {tmp2[colname].to_list()}. Keeping first entry: {row[colname]}")
     return gdf
 
@@ -319,8 +321,6 @@ def generate_nodes_from_edges(
     -------
     Tuple containing GeoDataFrame with edges and GeoDataFrame with nodes
     """
-
-    print('Generate nodes from edges...')
     edges['edge_no'] = range(len(edges))
     edges.index = edges['edge_no'].values
 
@@ -368,7 +368,7 @@ def snap_to_network(
     """
 
     if snap_type == "split_node":
-        print(f"Snapping split nodes within buffer distance to nodes ({buffer_distance * 0.1:.3f} m) or edges ({buffer_distance:.3f} m)...")
+        print(f" - Snapping split nodes: buffer distance to nodes ({buffer_distance * 0.1:.3f} m) or edges ({buffer_distance:.3f} m)...")
         points = snap_points_to_nodes_and_edges(
             points, 
             edges=edges, 
@@ -381,14 +381,14 @@ def snap_to_network(
         # get node no or edge no on which point is located
         points = get_node_no_and_edge_no_for_points(points, edges=edges, nodes=nodes)
         # print out all non-snapped split nodes
-        if any([(n == -1) and (e == -1) for n, e in zip(points['node_no'], points['edge_no'])]):
-            print(f"The following split nodes could not be snapped to nodes or edges within buffer distance:")
-            for i, row in points.iterrows():
-                if (row['node_no'] == -1) and (row['edge_no'] == -1):
-                    print(f"  Split node {row['split_node']} - split_node_id {row['split_node_id']}")
+        if ((points['node_no']==-1) & (points['edge_no']==-1)).any():
+            print(f" * The following split nodes could not be snapped to nodes or edges within buffer distance:")
+            for i, row in points[(points['node_no']==-1) & (points['edge_no']==-1)].iterrows():
+                print(row)
+                print(f"  * Split node {row['split_node']} - split_node_id {row['split_node_id']}")
         return points
     elif snap_type == "boundary":
-        print(f"Snapping boundaries within buffer distance ({buffer_distance:.3f} m) to nodes...")
+        print(f" - Snapping boundaries within buffer distance ({buffer_distance:.3f} m) to nodes...")
         points = snap_points_to_nodes_and_edges(
             points, 
             edges=None,   # exclude edges on purpose
@@ -399,11 +399,11 @@ def snap_to_network(
         # get node no or edge no on which point is located
         points = get_node_no_and_edge_no_for_points(points, edges=None, nodes=nodes)
         # print out all non-snapped boundaries
-        if any([(n == -1) for n in points['node_no']]):
+        if (points['node_no']==-1).any():
             print(f"The following boundaries could not be snapped to nodes within buffer distance:")
-            for i, row in points.iterrows():
-                if row['node_no'] == -1:
-                    print(f"  Boundary {row['boundary_id']} - {row['boundary_name']}")
+            for i, row in points[points['node_no']==-1].iterrows():
+                print(row)
+                print(f"  Boundary {row['boundary_id']} - {row['boundary_name']}")
         return points
     else:
         raise ValueError('Invalid snap_type. Can either be "split_node" or "boundary_id"')
@@ -445,16 +445,15 @@ def snap_points_to_nodes_and_edges(
     GeoDataFrame with snapped points (whether or not it's snapped can be derived from edge_no or node_no column value)
     """
 
-    print(f"Snapping points to nodes and/or edges")
+    print(f" - Snapping points to nodes and/or edges")
     new_points = points.geometry.tolist()
-    for i, point in enumerate(points.geometry):
+    for i, point in points.iterrows():
         if nodes is not None:
             check = False
             # check if point is within buffer distance of node(s)
-            ix = nodes.index.values[nodes.intersects(point.buffer(nodes_bufdist))]
+            ix = nodes.index.values[nodes.intersects(point.geometry.buffer(nodes_bufdist))]
             if len(nodes.loc[ix]) >= 1:
-                _dist_n_to_nodes = np.array([n.distance(point) 
-                                             for n in nodes.loc[ix].geometry.values])
+                _dist_n_to_nodes = np.array([n.distance(point.geometry) for n in nodes.loc[ix].geometry.values])
                 _ix = ix[np.argmin(_dist_n_to_nodes)]
                 new_point = nodes.loc[_ix, 'geometry']
                 node_no = nodes.loc[_ix, 'node_no']
@@ -468,13 +467,13 @@ def snap_points_to_nodes_and_edges(
                     if len(_edges) < n_edges_to_node_limit:
                         check = True
                     else:
-                        if 'split_node' in points.columns:
-                            point_label = f"Split node {points['split_node'].values[i]} (xy={point.x:3f},{point.y:3f})"
+                        if 'split_node' in point:
+                            point_label = f"Split node {point['split_node']} (xy={point.geometry.x:3f},{point.geometry.y:3f})"
                         else:
-                            point_label = f"Point with index {points.index.values[i]} (xy={point.x:3f},{point.y:3f})"
+                            point_label = f"Point with index {i} (xy={point.geometry.x:3f},{point.geometry.y:3f})"
+                        print(point)
                         print(f"  DEBUG - {point_label} can be snapped to node no {node_no} "
-                              f"but number of connected edges to node ({len(_edges)}) is equal or higher than limit "
-                              f"({n_edges_to_node_limit}). Don't snap to node and try to snap to edge. Please inspect manually")
+                              f"but number of connected edges ({len(_edges)}) is >= than limit ({n_edges_to_node_limit}).")
                 else:
                     check = True
             # if check is True, a valid node for point to snap to has been found
@@ -483,17 +482,17 @@ def snap_points_to_nodes_and_edges(
                 continue  # no need to check snapping to edge in this case
         if edges is not None:
             # if no edge is within point combined with buffer distance, skip
-            lines = edges.geometry.values[edges.geometry.intersects(point.buffer(edges_bufdist))]
+            lines = edges.geometry.values[edges.geometry.intersects(point.geometry.buffer(edges_bufdist))]
             # also skip if line is shorter than 2 m
             lines = lines[[l.length > min_length_edge for l in lines]]
             if len(lines) == 0:
                 continue
             # project node onto edge but make sure resulting point is some distance (0.5 meter) from start/end node of edge
-            _dist_along_line = [l.project(point) for l in lines]
+            _dist_along_line = [l.project(point.geometry) for l in lines]
             _dist_along_line = [((l.length - 0.5) if (d > (l.length - 0.5)) else d) if (d > 0.5) else 0.5 
                                 for l, d in zip(lines, _dist_along_line)]
             _nodes = np.array([l.interpolate(d) for l, d in zip(lines, _dist_along_line)], dtype=object)
-            _dist_n_to_nodes = np.array([n.distance(point) for n in _nodes])
+            _dist_n_to_nodes = np.array([n.distance(point.geometry) for n in _nodes])
             # filter out nodes that is within buffer distance and use one with minimum distance
             ix = np.where(_dist_n_to_nodes <= edges_bufdist)[0]
             if len(ix) >= 1:
@@ -531,7 +530,7 @@ def get_node_no_and_edge_no_for_points(
     Original GeoDataFrame of split nodes with extra edge_no and node_no column
     """
 
-    print('Retrieving edge no or node no for point locations...')
+    print(' - Retrieving edge no or node no for point locations...')
     prev_typs = None
     for typ, gdf in zip(['node_no', 'edge_no'], [nodes, edges]):
         if gdf is not None:
@@ -587,7 +586,7 @@ def split_edges_by_split_nodes(
     Tuple containing GeoDataFrame with split nodes, GeoDataFrame with edges and GeoDataFrame (start/end)nodes of edges
     """
 
-    print("Split edges by split nodes locations...")
+    print(" - Split edges by split nodes locations...")
     split_nodes['edge_no'] = [None] * len(split_nodes)
     edge_no_col_present = 'edge_no' in split_nodes.columns
     edge_no_col_present = all([x is not None for x in split_nodes['edge_no']]) if edge_no_col_present else False
@@ -679,7 +678,7 @@ def split_edges_by_dx(
     edges = edges.copy()
     edges_to_add = []
     edges_to_remove = []
-    print(f'Split up edges so each section approximates dx={dx:.3f} m...')
+    print(f' - Split up edges so each section approximates dx={dx:.3f} m...')
     for i, row in edges.iterrows():
         line = row['geometry']
 
@@ -804,7 +803,7 @@ def assign_unassigned_areas_to_basin_areas(
     basin_areas = basin_areas.copy()
     drainage_areas = drainage_areas.copy() if drainage_areas is not None else None
 
-    print("Assign unassigned areas to basin areas based on neighbouring basin areas within the same drainage area if possible")
+    # print("Assign unassigned areas to basin areas based on neighbouring basin areas within the same drainage area if possible")
     _areas = areas.loc[areas['basin'].isna()]
     nr_unassigned_areas = len(_areas)
     print(f" - {nr_unassigned_areas}x unassigned areas")
@@ -835,10 +834,11 @@ def assign_unassigned_areas_to_basin_areas(
             tmp = basin_areas.sjoin(drainage_areas, how='left')
             basin_to_drain = {i: tmp.loc[basin_areas['basin'] == i]['index_right'] for i in basin_areas['basin']}  # first check if basin area is overlapping any drainage area
             basin_to_drain = {k: drainage_areas.loc[v[~np.isnan(v)]].index.values for k, v in basin_to_drain.items()}
-            basin_to_drain = {k: v[0] if len(v) <= 1 
-                              else v[np.argmax([drainage_areas.loc[i, 'geometry'].intersection(basin_areas.loc[basin_areas['basin'] == k, 'geometry']).area 
-                                               for i in v])]
-                              for k, v in basin_to_drain.items() if len(v) > 0}
+            basin_to_drain = {
+                k: v[0] if len(v) >= 1 else v[np.argmax([
+                    drainage_areas.loc[i, 'geometry'].intersection(basin_areas.loc[basin_areas['basin'] == k, 'geometry']).area for i in v
+                ])] for k, v in basin_to_drain.items() if len(v) > 0
+            }
             drain_to_basin = {d: [k for k, v in basin_to_drain.items() if v == d] for d in np.unique(list(basin_to_drain.values()))}
         else:
             # in case no drainage areas supplied
