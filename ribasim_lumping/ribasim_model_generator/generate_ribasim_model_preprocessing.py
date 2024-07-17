@@ -40,13 +40,15 @@ def extract_bed_level_surface_storage(volume_data, nodes):
         node_surface_df[col] = np.interp(z_range, zlevels[col].values, df_data_col.values)
 
     node_storage_df = ((node_surface_df + node_surface_df.shift(1))/2.0 * increment).cumsum()
-    # node_storage_df = (node_surface_df * increment).cumsum()
+
     node_bedlevel = bedlevel
     node_bedlevel.index = ["bedlevel"]
     node_bedlevel.index.name = "condition"
 
     orig_bedlevel = bedlevel_T.copy()
     orig_bedlevel.columns = ["bedlevel"]
+
+    nodes["bedlevel"] = orig_bedlevel
     return node_surface_df, node_storage_df, node_bedlevel, orig_bedlevel
 
 
@@ -109,7 +111,7 @@ def get_basins_outflows_including_settings(split_nodes, basin_connections, bound
             [(set_name, "startlevelsuctionside") for set_name in set_names] + 
             [(set_name, "stoplevelsuctionside") for set_name in set_names],
         [("general", "structure_id"), ("structure", "crestlevel")],
-        [("general", "structure_id"), ("structure", "crestwidth")] + [(set_name, "crestlevel") for set_name in set_names],
+        [("general", "structure_id"), ("structure", "crestwidth"), ("structure", "crestlevel")],
     ]
     gdf_total = gpd.GeoDataFrame()
     for gdf, gdf_columns in zip(gdfs_list, gdfs_columns_list):
@@ -360,7 +362,7 @@ def preprocessing_ribasim_model_tables(
             set_names=set_names
         )
         return basins_outflows, None, None, None, None, None, None, None, \
-            None, None, None, None, None, None, None, None, None, None
+            None, None, None, None, None, None, None, None, None, None, None
     
     # prepare all data
     basins_outflows = get_basins_outflows_including_settings(

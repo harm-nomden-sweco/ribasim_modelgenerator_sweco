@@ -932,7 +932,7 @@ def assign_unassigned_areas_to_basin_areas(
     basin_areas = areas.dissolve(by="basin").reset_index()#.drop(columns=["area"])
     basin_areas["basin"] = basin_areas["basin"].astype(int)
     basin_areas["area_ha"] = basin_areas.geometry.area / 10000.0
-    basin_areas["color_no"] = basin_areas.index % 50
+    basin_areas["color_no"] = basin_areas.basin % 50
     
     if len(areas.loc[areas['basin'].isna()]) > 0:
         print(f" - not all unassigned areas could be assigned automatically ({len(areas.loc[areas['basin'].isna()])}x remaining). Please inspect manually")
@@ -971,3 +971,30 @@ def remove_holes_from_polygons(gdf, min_area):
         list_geometry.append(temp_pol)
     gdf.geometry = list_geometry
     return gdf
+
+
+def extract_segment_from_linestring(line, point1, point2):
+    dist1 = line.project(point1)
+    dist2 = line.project(point2)
+    
+    start_dist, end_dist = sorted([dist1, dist2])
+
+    coords = []
+    coords.append(line.interpolate(start_dist).coords[0])
+    
+    for seg_start, seg_end in zip(line.coords[:-1], line.coords[1:]):
+        seg_line = LineString([seg_start, seg_end])
+        seg_start_dist = line.project(Point(seg_start))
+        seg_end_dist = line.project(Point(seg_end))
+
+        if seg_start_dist > end_dist:
+            break
+
+        if seg_start_dist >= start_dist and seg_end_dist <= end_dist:
+            if coords[-1] != seg_start:  # Avoid duplicate points
+                coords.append(seg_start)
+            coords.append(seg_end)
+
+    if coords[-1] != line.interpolate(end_dist).coords[0]:
+        coords.append(line.interpolate(end_dist).coords[0])
+    return LineString(coords)

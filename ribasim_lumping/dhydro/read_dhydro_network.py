@@ -18,7 +18,7 @@ from shapely.geometry import LineString, Point
 from ..utils.general_functions import (
     find_directory_in_directory, find_file_in_directory, find_nearest_edges_no,
     find_nearest_nodes, get_points_on_linestrings_based_on_distances,
-    read_ini_file_with_similar_sections, replace_string_in_file)
+    read_ini_file_with_similar_sections, replace_string_in_file, extract_segment_from_linestring)
 
 
 def get_dhydro_files(simulation_path: Path):
@@ -135,14 +135,14 @@ def get_dhydro_edges_from_network_data(network_data, nodes_gdf, branches_gdf, cr
 
     edges_df["geometry"] = ""
     edges_gdf = edges_df.merge(
-        nodes_gdf,
+        nodes_gdf[["node_no", "geometry"]],
         how="inner",
         left_on="from_node",
         right_on="node_no",
         suffixes=["", "_from"],
     )
     edges_gdf = edges_gdf.merge(
-        nodes_gdf,
+        nodes_gdf[["node_no", "geometry"]],
         how="inner",
         left_on="to_node",
         right_on="node_no",
@@ -153,6 +153,15 @@ def get_dhydro_edges_from_network_data(network_data, nodes_gdf, branches_gdf, cr
         lambda row: LineString([row["geometry_from"], row["geometry_to"]]), axis=1
     )
     edges_gdf = gpd.GeoDataFrame(edges_gdf, geometry="geometry", crs=crs)
+    
+    edges_gdf = edges_gdf.merge(branches_gdf.rename(columns={'geometry': 'geometry_branch'}), how='left', on='branch_id')
+    edges_gdf["geometry"] = edges_gdf.apply(
+        lambda x: extract_segment_from_linestring(
+            x["geometry_branch"], 
+            x["geometry_from"], 
+            x["geometry_to"]
+        ), axis=1
+    )
     edges_gdf["edge_no"] = edges_gdf.index
     edges_gdf = edges_gdf[
         ["edge_no", "branch_id", "geometry", "from_node", "to_node"]
@@ -240,6 +249,7 @@ def check_number_of_pumps_at_pumping_station(pumps_gdf: gpd.GeoDataFrame, set_na
 
 def split_dhydro_structures(structures_gdf: gpd.GeoDataFrame, set_name: str):
     """Get all DHydro structures dataframes"""
+
     list_structure_types = list(structures_gdf['object_type'].unique())
     structures_gdf_dict = {}
     for structure_type in list_structure_types:
@@ -248,7 +258,10 @@ def split_dhydro_structures(structures_gdf: gpd.GeoDataFrame, set_name: str):
             continue
         # get structure type data
         structure_gdf = structures_gdf.loc[structures_gdf["object_type"] == structure_type].dropna(how='all', axis=1)
-        
+
+        if structure_type == "culvert":
+            structure_gdf["crestlevel"] = structure_gdf[["leftlevel", "rightlevel"]].max(axis=1)
+
         # comments are sometimes a separate object instead of string
         if 'comments' in structure_gdf.columns:
             structure_gdf.loc[:, 'comments'] = structure_gdf.loc[:, 'comments'].astype(str)
@@ -257,16 +270,16 @@ def split_dhydro_structures(structures_gdf: gpd.GeoDataFrame, set_name: str):
         header_0 = ["structure_id", "branch_id", "object_type", "chainage", "edge_no", "node_no"]
         headers_2 = {
             'weir': ["crestlevel"],
-            'uniweir': ["crestlevel", "yvalues", "zvalues"],
-            'universalWeir': ["crestlevel", "yvalues", "zvalues"],
-            'orifice': ["crestlevel", "gateloweredgelevel", "uselimitflowpos", "limitflowpos", "uselimitflowneg", "limitflowneg"],
+            'uniweir': ["crestlevel"],
+            'universalWeir': ["crestlevel"],
+            'orifice': ["gateloweredgelevel"],
             'pump': ["startlevelsuctionside", "stoplevelsuctionside", "startleveldeliveryside", "stopleveldeliveryside"],
         }
         if structure_type in headers_2.keys():
             header_2 = headers_2[structure_type]
         else:
             header_2 = []
-        if structure_type not in ['pump', 'culvert']:
+        if structure_type not in ['pump']:
             header_2 += ["upstream_upperlimit", "upstream_setpoint", "upstream_lowerlimit", 
                          "downstream_upperlimit", "downstream_setpoint", "downstream_lowerlimit"]
             for h in header_2:
@@ -284,13 +297,10 @@ def split_dhydro_structures(structures_gdf: gpd.GeoDataFrame, set_name: str):
             crs=structure_gdf.crs
         )
 
-        if structure_type == "culvert":
-            structure_gdf[("structure", "crestlevel")] = structure_gdf[[("structure", "leftlevel"), ("structure", "rightlevel")]].max(axis=1)
-
         # in case of pumps: 
         # - check if multiple pumps in one pumping station
         if structure_type == "pump":
-            # check for multiple pumps if gdf is filled
+            # check for multiple pumps if gdf is not empty
             if ~structure_gdf.empty:
                 old_no_pumps = len(structure_gdf)
                 structure_gdf = check_number_of_pumps_at_pumping_station(structure_gdf, set_name)
@@ -298,10 +308,9 @@ def split_dhydro_structures(structures_gdf: gpd.GeoDataFrame, set_name: str):
                     print(f" pumps ({old_no_pumps}x->{len(structure_gdf)}x)", end="", flush=True)
                 else:
                     print(f" pumps ({len(structure_gdf)}x)", end="", flush=True)
-                # display(structure_gdf.head())
             else:
                 print(f" {structure_type}s ({len(structure_gdf)}x)", end="", flush=True)
-
+        
         structures_gdf_dict[structure_type] = structure_gdf.sort_values(by=("general", "structure_id")).reset_index(drop=True)
     print(f" ")
     return structures_gdf_dict
@@ -331,6 +340,12 @@ def get_dhydro_external_forcing_locations(
     boundaries_gdf = boundaries_gdf.reset_index(drop=True)
     boundaries_gdf.insert(0, "boundary_id", boundaries_gdf.index + 1)
     boundaries_gdf = boundaries_gdf.rename(columns={"network_node_id": "name"})
+    boundaries_gdf = boundaries_gdf.rename(
+        columns={"name": "boundary_name", "quantity": "boundary_type"}
+    ).drop(columns="index_right")
+    boundaries_gdf["boundary_type"] = boundaries_gdf["boundary_type"].map(
+        {"dischargebnd": "FlowBoundary", "waterlevelbnd": "LevelBoundary"}
+    )
     print(f" boundaries ({len(boundaries_gdf)}x)", end="", flush=True)
 
     laterals_gdf = read_ini_file_with_similar_sections(external_forcing_file, "Lateral")
@@ -393,6 +408,8 @@ def get_dhydro_forcing_data(
 
 
     def get_laterals_data_df(laterals_data, laterals_gdf):
+        if laterals_data is None:
+            return None
         laterals_data = laterals_data.merge(laterals_gdf["name"], how="right", left_on="name", right_on="name")
         laterals_df = pd.DataFrame()
         laterals_floats = dict()
@@ -421,9 +438,8 @@ def get_dhydro_volume_based_on_basis_simulations(
     mdu_file = find_file_in_directory(mdu_input_dir, ".mdu")
     volume_nc_file = find_file_in_directory(mdu_input_dir, "PerGridpoint_volume.nc")
     if volume_nc_file is None or volume_tool_force:
-        subprocess.Popen(
-            f'"{volume_tool_bat_file}" --mdufile "{mdu_file.name}" --increment {str(volume_tool_increment)} --outputfile volume.nc --output "All"', cwd=str(mdu_file.parent)
-        )
+        subproces_cli = f'"{volume_tool_bat_file}" --mdufile "{mdu_file.name}" --increment {str(volume_tool_increment)} --outputfile volume.nc --output "All"'
+        subprocess.Popen(subproces_cli, cwd=str(mdu_file.parent))
         volume_nc_file = find_file_in_directory(mdu_input_dir, "PerGridpoint_volume.nc")
         print(f"  - volume_tool: new level-volume dataframe created: {volume_nc_file.name}")
     else:
@@ -467,7 +483,6 @@ def get_dhydro_data_from_simulation(
         branches_gdf=branches_gdf, 
         edges_gdf=edges_gdf
     )
-    # display(structures_gdf.head())
     structures_dict = split_dhydro_structures(structures_gdf, set_name)
 
     boundaries_gdf, laterals_gdf = get_dhydro_external_forcing_locations(

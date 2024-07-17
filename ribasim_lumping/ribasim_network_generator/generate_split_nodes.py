@@ -99,7 +99,7 @@ def add_split_nodes_based_on_selection(
     ]
 
     # include/exclude edge centers
-    if edges or len(edge_ids_to_include) > 1:
+    if edges or len(edge_ids_to_include) >= 1:
         additional_split_nodes = None
         if edges:
             additional_split_nodes = network_edges.copy()
@@ -110,20 +110,15 @@ def add_split_nodes_based_on_selection(
         elif len(edge_ids_to_include):
             additional_split_nodes = network_edges[
                 network_edges.edge_no.isin(edge_ids_to_include)
-            ][["edge_no", "geometry"]]
+            ][["edge_no", "branch_id", "geometry"]]
         if additional_split_nodes is not None:
             additional_split_nodes.geometry = additional_split_nodes.geometry.apply(
-                lambda g: g.centroid
+                lambda g: g.interpolate(0.5, normalized=True)
             )
-            additional_split_nodes["object_type"] = "open water"
+            # additional_split_nodes["split_node_id"] = additional_split_nodes["branch_id"] + "__" + additional_split_nodes["edge_no"].astype(str)
+            additional_split_nodes["split_node_id"] = additional_split_nodes["edge_no"]
+            additional_split_nodes["object_type"] = "openwater"
             additional_split_nodes["node_no"] = -1
-            # additional_split_nodes = additional_split_nodes.rename(columns={
-            #     "mesh1d_edge_x": "projection_x",
-            #     "mesh1d_edge_y": "projection_y",
-            # })
-            # additional_split_nodes = additional_split_nodes.drop(
-            #     ["start_node_no", "end_node_no", "basin"], axis=1, errors="ignore"
-            # )
             split_nodes = pd.concat([split_nodes, additional_split_nodes])
             split_nodes = split_nodes.drop_duplicates(subset="edge_no", keep="first")
 

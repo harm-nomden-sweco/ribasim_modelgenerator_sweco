@@ -279,7 +279,7 @@ def create_basin_areas_based_on_drainage_unit_areas(
 
     basin_areas["basin"] = basin_areas["basin"].astype(int)
     basin_areas["area_ha"] = basin_areas.geometry.area / 10000.0
-    basin_areas["color_no"] = basin_areas.index % 50
+    basin_areas["color_no"] = basin_areas.basin % 50
     print(
         f" - define for each Ribasim-Basin the related basin area ({len(basin_areas)}x)"
     )
@@ -507,18 +507,24 @@ def create_boundary_connections(
         return None, split_nodes, basins
     
     # merge boundaries with nodes and basins
-    boundaries_conn = boundaries[["boundary_id", "boundary_type", "geometry"]].sjoin_nearest(nodes[["node_no", "geometry", "basin"]])
+    boundaries_conn = boundaries[
+        ["boundary_id", "boundary_type", "geometry"]
+    ].sjoin_nearest(nodes[["node_no", "geometry", "basin"]])
     
     boundaries_conn = boundaries_conn.drop(
         columns=["index_right"]
     ).rename(columns={"node_no": "boundary_node_no"})
     boundaries_conn.crs = nodes.crs
-    boundaries_conn = boundaries_conn.rename(columns={"geometry": "geom_boundary"}).merge(
-        basins[["basin", "geometry"]].rename(columns={"geometry": "geom_basin"}), 
+    boundaries_conn = boundaries_conn.rename(
+        columns={"geometry": "geom_boundary"}
+    ).merge(
+        basins[["basin", "geometry"]].rename(
+            columns={"geometry": "geom_basin"}
+        ), 
         how="left", 
         on="basin"
     )
-    
+        
     # Discharge boundaries (1 connection, always inflow)
     dischargebnd_conn_in = boundaries_conn[boundaries_conn.boundary_type == "FlowBoundary"]
     if dischargebnd_conn_in.empty:
@@ -631,27 +637,37 @@ def remove_boundary_basins_if_not_needed(
     flow_boundary_connections = boundary_connections[boundary_connections.boundary_type=="FlowBoundary"]
     level_boundary_connections = boundary_connections[boundary_connections.boundary_type=="LevelBoundary"]
 
-    if not include_flow_boundary_basins:
+    if not include_flow_boundary_basins and not flow_boundary_connections.empty:
         flow_boundary_connections, basin_connections, basins = remove_basins_from_boundary(
             flow_boundary_connections, basin_connections, basins
         )
-    if not include_level_boundary_basins:
+    if not include_level_boundary_basins and not level_boundary_connections.empty:
         level_boundary_connections, basin_connections, basins = remove_basins_from_boundary(
             level_boundary_connections, basin_connections, basins
         )
     
     boundary_connections = pd.concat([flow_boundary_connections, level_boundary_connections])
-    boundary_connections["split_node"] = boundary_connections["split_node"].fillna(-1).astype(int)
+    if "split_node" in boundary_connections.columns:
+        boundary_connections["split_node"] = boundary_connections["split_node"].fillna(-1).astype(int)
+    else:
+        boundary_connections["split_node"] = -1
     boundary_connections = boundary_connections.sort_values(by="boundary_id").reset_index(drop=True)
 
-    boundary_connections = boundary_connections.drop(columns=["geom_boundary", "geom_basin", "geom_split_node"])
-    basin_connections = basin_connections.drop(columns=["geom_basin", "geom_split_node"])
+    boundary_connections = boundary_connections.drop(
+        columns=["geom_boundary", "geom_basin", "geom_split_node"], 
+        errors='ignore'
+    )
+    basin_connections = basin_connections.drop(
+        columns=["geom_basin", "geom_split_node"], 
+        errors='ignore'
+    )
     return boundary_connections, basin_connections, basins
 
 
 def remove_holes_from_basin_areas(basin_areas: gpd.GeoDataFrame, min_area: float):
     print(f" - remove holes within basin areas with less than {min_area/10000.0:.2f}ha")
     return remove_holes_from_polygons(geom=basin_areas, min_area=min_area)
+
 
 def regenerate_node_ids(
         boundaries: gpd.GeoDataFrame,
@@ -1005,11 +1021,13 @@ def generate_ribasim_network_using_split_nodes(
     #     split_node_type_conversion=split_node_type_conversion, 
     #     split_node_id_conversion=split_node_id_conversion
     # )
+
     # check_basins_connected_to_basin_areas(
     #     basins=basins, 
     #     basin_areas=basin_areas,
     #     boundary_connections=boundary_connections,
     # )
+    
     return dict(
         basin_areas=basin_areas,
         basins=basins,

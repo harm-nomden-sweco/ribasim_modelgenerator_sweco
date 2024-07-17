@@ -5,6 +5,7 @@ from contextlib import closing
 from pathlib import Path
 from sqlite3 import connect
 from typing import Dict, List, Union, Tuple
+import datetime
 
 import geopandas as gpd
 import matplotlib
@@ -124,23 +125,47 @@ class RibasimLumpingNetwork(BaseModel):
     simulations_ts: List[Union[List, pd.DatetimeIndex]] = []
     crs: int = 28992
 
+
+    def read_areas(self, areas_file_path: Path = None, areas_gpkg_path: Path = None, 
+                   areas_gpkg_layer: str = None, areas_id_column: str = None):
+        if areas_file_path is not None:
+            areas_gdf = gpd.read_file(areas_file_path)
+        elif isinstance(areas_gpkg_path, Path) and isinstance(areas_gpkg_layer, str):
+            areas_gdf = gpd.read_file(areas_gpkg_path, layer=areas_gpkg_layer)
+        else:
+            raise ValueError(' no areas_file_path or areas_gpkg_path+areas_gpkg_layer defined')
+        self.areas_gdf = areas_gdf.rename(columns={areas_id_column: "area_code"})
+        print(f" - areas ({len(areas_gdf)}x)")
+
+
+    def read_areas_laterals_timeseries(self, areas_laterals_path: Path, sep: str = ',', index_col: int = 0, dayfirst=False):
+        self.laterals_areas_data = pd.read_csv(areas_laterals_path, index_col=index_col, sep=sep, parse_dates=True, dayfirst=dayfirst)
+
+
+    def read_boundaries_timeseries_data(self, boundaries_timeseries_path: Path, skiprows=0, sep=",", index_col=0):
+        boundary_csv_data = pd.read_csv(
+            boundaries_timeseries_path, 
+            sep=sep,
+            skiprows=skiprows, 
+            index_col=index_col, 
+            parse_dates=True
+        )
+        boundary_csv_data = boundary_csv_data.interpolate()
+        self.boundaries_timeseries_data = boundary_csv_data
+
+
     def add_basis_network(
             self, 
             source_type: str,
-            set_name: str = None,
+            set_name: str = "",
+            set_start_month: int = 1,
+            set_start_day: int = 1,
             dhydro_model_dir: Path = '.', 
             dhydro_simulation_name: str = 'default',
             dhydro_volume_tool_bat_file: Path = '.', 
             dhydro_volume_tool_force: bool = False,
             dhydro_volume_tool_increment: float = 0.1,
-            hydamo_network_file: Path = 'network.gpkg',
-            # ribasim_input_boundary_file: Path = 'boundary.gpkg',
-            # ribasim_input_boundary_gpkg_layer: str = 'boundary',
-            # ribasim_input_split_nodes_file: Path = 'split_nodes.gpkg',
-            # ribasim_input_split_nodes_gpkg_layer: Path = 'split_nodes',
-            # hydamo_split_nodes_bufdist: float = 10.0,
-            # hydamo_boundary_bufdist: float = 10.0,
-            hydamo_write_results_to_gpkg: bool = False,
+            hydamo_network_file: Path = 'hydamo.gpkg',
             hydamo_split_network_dx: float = None,
         ) -> Tuple[gpd.GeoDataFrame]:
         """
@@ -165,13 +190,8 @@ class RibasimLumpingNetwork(BaseModel):
             dhydro_volume_tool_bat_file (Path):         Path to D-HYDRO volume tool batch file
             hydamo_network_file (str):                  Path to HyDAMO file containing network geometries
             hydamo_network_gpkg_layer (str):            Layer name of HyDAMO network file in case it is a geopackage
-            ribasim_input_boundary_file (str):          Path to file containing Ribasim input boundary geometries (additionally needed when using HyDAMO data)
-            ribasim_input_boundary_gpkg_layer (str):    Layer name of Ribasim input boundary file in case it is a geopackage
-            ribasim_input_split_nodes_file (str):       Path to file containing Ribasim input split nodes geometries (additionally needed when using HyDAMO data)
-            ribasim_input_split_nodes_gpkg_layer (str): Layer name of Ribasim input split nodes file in case it is a geopackage
             hydamo_split_nodes_bufdist (float):         Buffer distance (in meter) to snap split nodes to HyDAMO network
             hydamo_boundary_bufdist (float):            Buffer distance (in meter) to snap boundaries to HyDAMO network start/end nodes
-            hydamo_write_results_to_gpkg (bool):        Write intermediate (HyDAMO) results (split nodes, edges, nodes, boundaries) to geopackages
             hydamo_split_network_dx (float):            Distance (in meter) to split up hydamo network (hydroobjects) into smaller sections. Default None
                                                         meaning no splitting is performed. The actual lengths of splitted sections will be close to given distance
                                                         but not exactly the same to prevent generating very small sections
@@ -196,9 +216,38 @@ class RibasimLumpingNetwork(BaseModel):
             self.basis_simulations_names.append(dhydro_simulation_name)
             if results is not None:
                 self.network_data, self.branches_gdf, self.network_nodes_gdf, self.edges_gdf, \
-                    self.nodes_gdf, self.boundaries_gdf, self.laterals_gdf, self.weirs_gdf, \
-                    self.uniweirs_gdf, self.pumps_gdf, self.orifices_gdf, self.bridges_gdf, \
-                    self.culverts_gdf, self.boundaries_data, self.laterals_data, self.volume_data = results
+                    self.nodes_gdf, self.boundaries_gdf, self.laterals_gdf, weirs_gdf, \
+                    uniweirs_gdf, pumps_gdf, orifices_gdf, culverts_gdf, self.bridges_gdf, \
+                    self.boundaries_data, self.laterals_data, self.volume_data = results
+
+                def combine_old_gdf_with_new_gdf_using_setname(old_gdf, new_gdf, set_name):
+                    if new_gdf is not None:
+                        if old_gdf is None:
+                            return new_gdf.copy()
+                        else:
+                            return gpd.GeoDataFrame(
+                                old_gdf.drop(
+                                    columns=['geometry', set_name], errors='ignore'
+                                ).merge(
+                                    new_gdf[[set_name, 'geometry']], 
+                                    how='outer', 
+                                    left_index=True,
+                                    right_index=True
+                                ),
+                                geometry="geometry",
+                                crs=old_gdf.crs
+                            )
+
+                self.pumps_gdf = combine_old_gdf_with_new_gdf_using_setname(self.pumps_gdf, pumps_gdf, set_name)
+                self.weirs_gdf = combine_old_gdf_with_new_gdf_using_setname(self.weirs_gdf, weirs_gdf, set_name)
+                self.uniweirs_gdf = combine_old_gdf_with_new_gdf_using_setname(self.uniweirs_gdf, uniweirs_gdf, set_name)
+                self.orifices_gdf = combine_old_gdf_with_new_gdf_using_setname(self.orifices_gdf, orifices_gdf, set_name)
+                self.culverts_gdf = combine_old_gdf_with_new_gdf_using_setname(self.culverts_gdf, culverts_gdf, set_name)
+
+            self.basis_set_start_months.append(set_start_month)
+            self.basis_set_start_days.append(set_start_day)
+            self.basis_model_dirs.append(dhydro_model_dir)
+            self.basis_simulations_names.append(dhydro_simulation_name)
         
         elif source_type == 'hydamo':
             print(f'Network {self.name} - Analysis HyDAMO data')
@@ -213,16 +262,18 @@ class RibasimLumpingNetwork(BaseModel):
                     self.pumps_df, self.sluices_gdf, self.closers_gdf = results
             
         self.basis_source_types.append(source_type)
+        self.basis_set_names.append(set_name)
 
         return results
+
 
     def add_simulation_set(
         self,
         set_name: str,
         model_dir: Path,
         simulation_names: List[str],
-        simulation_ts: Union[List, pd.DatetimeIndex] = [-1],
         source_type: str = 'dhydro',
+        simulation_ts: Union[List, pd.DatetimeIndex] = [-1],
     ):
         if source_type == 'dhydro':
             self.his_data, self.map_data = add_dhydro_simulation_data(
@@ -777,13 +828,17 @@ class RibasimLumpingNetwork(BaseModel):
         self, 
         set_name: str,
         dummy_model: bool = False,
-        saveat: int = None,
         interpolation_lines: int = 5,
-        database_gpkg: str = 'database.gpkg',
+        saveat: int = 24*3600,
+        maxiters: int = None,
+        starttime: datetime.datetime = None,
+        endtime: datetime.datetime = None,
+        results_subgrid: bool = False,
         results_dir: str = 'results',
-        results_subgrid: bool = False
+        database_gpkg: str = 'database.gpkg',
     ):
-        if set_name not in self.basis_set_names:
+        if not dummy_model and set_name not in self.basis_set_names:
+            # print(f"set_name {set_name} not in available set_names")
             raise ValueError(f'set_name {set_name} not in available set_names')
         
         # preprocessing data to input for tables
@@ -831,22 +886,16 @@ class RibasimLumpingNetwork(BaseModel):
         self.node_targetlevel = node_targetlevel
 
         basin_h_initial = None
-        if not dummy_model:
+        if not dummy_model and basin_h is not None:
             if self.method_initial_waterlevels == 1:
                 basin_h_initial = basin_h.loc[set_name].loc["targetlevel"]
                 # raise ValueError('method initial waterlevels = 1 not yet implemented')
             elif self.method_initial_waterlevels == 2:
-                ind_initial_h = 0
-                for i_set_name, i_simulations_names, i_sim_ts in zip(self.set_names, self.simulations_names, self.simulations_ts):
-                    if i_set_name != set_name:
-                        ind_initial_h += len(i_sim_ts)
-                    else:
-                        for i_ts, ts in enumerate(i_sim_ts):
-                            if i_ts == self.initial_waterlevels_timestep:
-                                break
-                            ind_initial_h += 1
-                        break
-                basin_h_initial = basin_h.loc[set_name].iloc[ind_initial_h + 2 + interpolation_lines*2]
+                basin_h_initial = basin_h.loc[self.initial_waterlevels_set_name]
+                if self.initial_waterlevels_timestep in basin_h_initial.index:
+                    basin_h_initial = basin_h_initial.loc[self.initial_waterlevels_timestep]
+                else:
+                    basin_h_initial = basin_h_initial.iloc[-1]
             elif self.method_initial_waterlevels == 3:
                 raise ValueError('method initial waterlevels = 3 not yet implemented')
             else:
@@ -896,27 +945,41 @@ class RibasimLumpingNetwork(BaseModel):
             database_gpkg=database_gpkg,
             results_dir=results_dir,
         )
-        self.ribasim_model = ribasim_model
-        
         # Export ribasim model
         if self.simulation_path is None:
             self.simulation_path = Path(self.results_dir, self.simulation_code)
         # check for timestep (saveat)
-        if saveat is not None:
-            ribasim_model.solver = ribasim.Solver(saveat=saveat)
-        if results_subgrid:
-            ribasim_model.results.subgrid = True
+        if maxiters is None:
+            ribasim_model.solver = ribasim.Solver(saveat=saveat, sparse=False)
+        else:
+            ribasim_model.solver = ribasim.Solver(saveat=saveat, maxiters=maxiters, sparse=False)
+        ribasim_model.results = ribasim.Results(subgrid=results_subgrid)
 
-        ribasim_model.write(Path(self.simulation_path, "ribasim.toml"))
-        with open(Path(self.simulation_path, "run_ribasim_model.bat"), 'w') as f:
-            f.write(f"{str(self.path_ribasim_executable)} ribasim.toml\n")
-            f.write(f"pause")
+        self.ribasim_model = ribasim_model
+        self.write_ribasim_model(
+            starttime=starttime, 
+            endtime=endtime
+        )
+        return ribasim_model
+
+
+    def write_ribasim_model(self, starttime=None, endtime=None):
+        if starttime is not None and endtime is not None:
+            self.ribasim_model.starttime = starttime
+            self.ribasim_model.endtime = endtime
 
         print(f"Export location: {Path(self.results_dir, self.simulation_code)}")
         # export ribasim_network
         self.export_to_geopackage(simulation_code=self.simulation_code)
-        return ribasim_model
 
+        # export ribasim_model
+        self.ribasim_model.write(Path(self.simulation_path, "ribasim.toml"))
+        
+        # write bat-file
+        with open(Path(self.simulation_path, "run_ribasim_model.bat"), 'w') as f:
+            f.write(f"{str(self.path_ribasim_executable)} ribasim.toml\n")
+            f.write(f"pause")
+        
 
     def export_to_geopackage(
             self, 
@@ -1012,6 +1075,15 @@ class RibasimLumpingNetwork(BaseModel):
             shutil.copy(qgz_path_stored, qgz_path)
         print("")
         print(f"Export location: {qgz_path}")
+
+    def plot_tabulated_rating_curves(self):
+        trcs = self.ribasim_model.tabulated_rating_curve.static.df.groupby("node_id")
+        for node_id in trcs.groups.keys():
+            fig, ax = plt.subplots(1,1)
+            trcs.get_group(node_id).set_index("flow_rate")["level"].plot(marker="o")
+            trc_name = self.ribasim_model.network.node.df.loc[node_id]["name"]
+            ax.set_title(f"Tabulated Rating Curve {node_id} [{trc_name}]")
+            plt.show()
 
     def plot(self):
         fig, ax = plt.subplots(figsize=(10, 10))

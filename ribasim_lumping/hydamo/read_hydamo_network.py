@@ -1,14 +1,15 @@
 from pathlib import Path
-from ..utils.general_functions import read_geom_file, generate_nodes_from_edges, split_edges_by_dx
 from shapely.geometry import LineString, Point
 from typing import Tuple
 import geopandas as gpd
 import pandas as pd
 import fiona
 
+from ..utils.general_functions import read_geom_file, generate_nodes_from_edges, split_edges_by_dx
+
 
 def add_hydamo_basis_network(
-    hydamo_network_file: Path = 'network.gpkg',
+    hydamo_network_file: Path = 'hydamo.gpkg',
     hydamo_split_network_dx: float = None,
     crs: int = 28992,
 ):
@@ -95,7 +96,6 @@ def add_hydamo_basis_network(
     
     # set column names to lowercase and return
     results = [branches_gdf, network_nodes_gdf, edges_gdf, nodes_gdf, weirs_gdf, culverts_gdf, pumps_gdf, pumps_df, sluices_gdf, closers_gdf]
-    results = [x.rename(columns={c: c.lower() for c in x.columns}) if x is not None else None 
-               for x in results]
+    results = [None if x is None else x.rename(columns={c: c.lower() for c in x.columns}) for x in results]
     return results
 

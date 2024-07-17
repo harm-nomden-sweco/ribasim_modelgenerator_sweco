@@ -57,8 +57,8 @@ def add_dhydro_basis_network(
 
     return network_data, branches_gdf, network_nodes_gdf, edges_gdf, \
         nodes_gdf, boundaries_gdf, laterals_gdf, weirs_gdf, \
-        uniweirs_gdf, pumps_gdf, orifices_gdf, bridges_gdf, \
-        culverts_gdf, boundaries_data, laterals_data, volume_data
+        uniweirs_gdf, pumps_gdf, orifices_gdf, culverts_gdf, bridges_gdf, \
+        boundaries_data, laterals_data, volume_data
 
 
 def add_dhydro_simulation_data(
