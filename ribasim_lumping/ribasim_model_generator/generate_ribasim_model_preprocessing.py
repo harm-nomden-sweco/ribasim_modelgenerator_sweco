@@ -3,24 +3,79 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 import math
+from typing import Dict, Tuple
+
+
+def generate_ribasim_types_for_all_split_nodes(
+        boundaries: gpd.GeoDataFrame, 
+        split_nodes: gpd.GeoDataFrame, 
+        basins: gpd.GeoDataFrame, 
+        split_node_type_conversion: Dict, 
+        split_node_id_conversion: Dict,
+    ) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """"
+    Generate Ribasim Types for all split nodes
+    """
+
+    print(f" - define Ribasim-Nodes types based on input conversion table(s)")
+    # Basins
+    basins["ribasim_type"] = "Basin"
+    basins["name"] = "Basin"
+
+    # Boundaries
+    boundaries["ribasim_type"] = boundaries["boundary_type"]
+    boundaries["name"] = boundaries["boundary_name"]
+
+    # Split nodes
+    removed_split_nodes = None
+    if not split_nodes[~split_nodes.status].empty:
+        removed_split_nodes = split_nodes[~split_nodes.status].copy()
+        print(f"   * {len(removed_split_nodes)} split_nodes resulting in no_split")
+        split_nodes = split_nodes[split_nodes.status]
+
+    split_nodes["ribasim_type"] = "TabulatedRatingCurve" 
+    split_nodes_conversion = {
+        "weir": "TabulatedRatingCurve",
+        "uniweir": "TabulatedRatingCurve",
+        "pump": "Pump",
+        "culvert":"ManningResistance",
+        "manual": "ManningResistance",
+        "orifice": "TabulatedRatingCurve",
+        "boundary_connection": "ManningResistance"
+    }
+    if isinstance(split_node_type_conversion, Dict):
+        for key, value in split_node_type_conversion.items():
+            split_nodes_conversion[key] = value
+    split_nodes["ribasim_type"] = split_nodes["split_type"].replace(split_nodes_conversion)
+
+    if isinstance(split_node_id_conversion, Dict):
+        for key, value in split_node_id_conversion.items():
+            if len(split_nodes[split_nodes["split_node_id"] == key]) == 0:
+                print(f"   * split_node type conversion id={key} (type={value}) does not exist")
+            split_nodes.loc[split_nodes["split_node_id"] == key, "ribasim_type"] = value
+
+    # add removed split nodes back into gdf
+    if removed_split_nodes is not None:
+        split_nodes = pd.concat([split_nodes, removed_split_nodes], axis=0)
+    return boundaries, split_nodes, basins
 
 
 def extract_bed_level_surface_storage(volume_data, nodes):
     increment = volume_data.increment.data[0]
 
-    zlevels = volume_data.bedlevel.to_dataframe().T
-    zlevels.columns.name = "node_no"
-    zlevels.index = [0]
-    bedlevel = zlevels.iloc[[0], nodes.node_no]
-    bedlevel_T = bedlevel.T
-    bedlevel_T.columns = ["bedlevel"]
+    # bedlevel
+    bedlevel = volume_data.bedlevel.to_dataframe().T
+    bedlevel.columns.name = "node_no"
+    bedlevel.index = ["bedlevel"]
 
     if "bedlevel" not in nodes.columns:
-        nodes = nodes.merge(bedlevel_T, left_on="node_no", right_index=True)
+        nodes = nodes.merge(bedlevel.T, left_on="node_no", right_index=True)
+    # get lowest bedlevel within basin
     basins_bedlevels = nodes[["basin", "bedlevel"]].groupby(by="basin").min()
-    bedlevel = nodes[["basin"]].merge(basins_bedlevels, left_on="basin", right_index=True)
-    bedlevel = bedlevel[["bedlevel"]].T
+    bedlevel_basin = nodes[["basin"]].merge(basins_bedlevels, left_on="basin", right_index=True)
+    bedlevel_basin = bedlevel_basin[["bedlevel"]].T
 
+    # surface from volume_data
     surface_df = volume_data.surface.to_dataframe().unstack()
     surface_df = surface_df.replace(0.0, np.nan).ffill(axis=1)
     surface_df.index.name = "node_no"
@@ -28,11 +83,14 @@ def extract_bed_level_surface_storage(volume_data, nodes):
     surface_df = pd.concat([bedlevel - 0.01, surface_df]).reset_index(drop=True)
     surface_df.iloc[0] = 0
 
+    # define zlevels
+    zlevels = bedlevel - 0.01
     for i in range(1, len(surface_df)):
-        zlevels = pd.concat([zlevels, bedlevel_T.T + increment * i])
+        zlevels = pd.concat([zlevels, bedlevel + increment * (i-1)])
     zlevels = zlevels.reset_index(drop=True)
-    z_range = np.arange(np.floor(zlevels.min().min()), np.ceil(zlevels.max().max())+0.01, increment)
+    z_range = np.arange(np.floor(zlevels.min().min()), np.ceil(zlevels.max().max())+increment, increment)
 
+    # find surface levels simulation using interpolation
     node_surface_df = pd.DataFrame(index=z_range, columns=surface_df.columns)
     node_surface_df.index.name = "zlevel"
     for col in node_surface_df.columns:
@@ -41,14 +99,11 @@ def extract_bed_level_surface_storage(volume_data, nodes):
 
     node_storage_df = ((node_surface_df + node_surface_df.shift(1))/2.0 * increment).cumsum()
 
-    node_bedlevel = bedlevel
+    node_bedlevel = bedlevel_basin
     node_bedlevel.index = ["bedlevel"]
     node_bedlevel.index.name = "condition"
 
-    orig_bedlevel = bedlevel_T.copy()
-    orig_bedlevel.columns = ["bedlevel"]
-
-    nodes["bedlevel"] = orig_bedlevel
+    orig_bedlevel = bedlevel.T
     return node_surface_df, node_storage_df, node_bedlevel, orig_bedlevel
 
 
@@ -132,32 +187,29 @@ def get_basins_outflows_including_settings(split_nodes, basin_connections, bound
     if "structure_id" in basins_outflows1.columns:
         basins_outflows1 = basins_outflows1.drop(columns=["structure_id"])
     
-    basins_outflows1 = pd.concat([basins_outflows1], keys=['general'], axis=1)
-    
+    basins_outflows = pd.concat([basins_outflows1], keys=['general'], axis=1)
+
     gdf_total.columns = ['__'.join(col).strip('__') for col in gdf_total.columns.values]
-    basins_outflows1.columns = ['__'.join(col).strip('__') for col in basins_outflows1.columns.values]
-    basins_outflows1 = (
-        basins_outflows1
-        .merge(
-            gdf_total, 
-            how="left",
-            left_on="general__split_node_id", 
-            right_on="general__structure_id"
-        )
+    basins_outflows.columns = ['__'.join(col).strip('__') for col in basins_outflows.columns.values]
+    basins_outflows = basins_outflows.merge(
+        gdf_total, 
+        how="left", 
+        left_on="general__split_node_id", 
+        right_on="general__structure_id"
     )
-    basins_outflows1 = (
-        basins_outflows1
+    basins_outflows = (
+        basins_outflows
         .sort_values(by="general__basin")
         .reset_index(drop=True)
         .drop(columns=["general__structure_id"])
     )
+    
+    # basins_outflows2 = boundary_connections[boundary_connections.connection=="basin_to_split_node"]
+    # basins_outflows2 = basins_outflows2[["basin", "split_node", "split_node_id"]]
+    # basins_outflows2["ribasim_type"] = "ManningResistance"
+    # basins_outflows2.columns = ["general__" + col for col in basins_outflows2.columns]
 
-    basins_outflows2 = boundary_connections[boundary_connections.connection=="basin_to_split_node"]
-    basins_outflows2 = basins_outflows2[["basin", "split_node", "split_node_id"]]
-    basins_outflows2["ribasim_type"] = "ManningResistance"
-    basins_outflows2.columns = ["general__" + col for col in basins_outflows2.columns]
-
-    basins_outflows = pd.concat([basins_outflows1, basins_outflows2])
+    # basins_outflows = pd.concat([basins_outflows1, basins_outflows2])
 
     for set_name in set_names:
         basins_outflows[set_name + "__targetlevel"] = np.nan
@@ -346,9 +398,17 @@ def generate_h_relation_basins_nodes(nodes, node_h_basin, basin_h):
 
 
 def preprocessing_ribasim_model_tables(
-    dummy_model, map_data, his_data, volume_data, nodes, weirs, uniweirs, pumps, culverts, orifices, basins, split_nodes, 
-    basin_connections, boundary_connections, interpolation_lines, set_names
+    dummy_model, map_data, his_data, volume_data, nodes, weirs, uniweirs, pumps, culverts, orifices, boundaries, basins, split_nodes, 
+    basin_connections, boundary_connections, interpolation_lines, set_names, split_node_type_conversion, split_node_id_conversion
 ):
+    boundaries, split_nodes, basins = generate_ribasim_types_for_all_split_nodes(
+        boundaries=boundaries, 
+        split_nodes=split_nodes, 
+        basins=basins, 
+        split_node_type_conversion=split_node_type_conversion, 
+        split_node_id_conversion=split_node_id_conversion
+    )
+
     if dummy_model:
         basins_outflows = get_basins_outflows_including_settings(
             split_nodes=split_nodes, 

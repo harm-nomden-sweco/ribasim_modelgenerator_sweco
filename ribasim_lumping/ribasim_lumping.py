@@ -124,7 +124,7 @@ class RibasimLumpingNetwork(BaseModel):
     simulations_output_dirs: List[str] = []
     simulations_ts: List[Union[List, pd.DatetimeIndex]] = []
     crs: int = 28992
-
+    
 
     def read_areas(self, areas_file_path: Path = None, areas_gpkg_path: Path = None, 
                    areas_gpkg_layer: str = None, areas_id_column: str = None):
@@ -410,7 +410,7 @@ class RibasimLumpingNetwork(BaseModel):
             min_length_edge=min_length_edge
         )
         self.boundaries_gdf["boundary_id"] = self.boundaries_gdf.index + 1
-
+    
         if 'quantity' in self.boundaries_gdf.columns:
             self.boundaries_gdf['quantity'] = self.boundaries_gdf['quantity'].replace({'dischargebnd': 'FlowBoundary', 'waterlevelbnd': 'LevelBoundary'})
         self.boundaries_gdf = self.boundaries_gdf.rename({'quantity': 'boundary_type'})
@@ -723,21 +723,21 @@ class RibasimLumpingNetwork(BaseModel):
             self,
             simulation_code: str,
             set_name: str,
-            # split_node_type_conversion: Dict,
-            # split_node_id_conversion: Dict,
+            split_node_type_conversion: Dict,
+            split_node_id_conversion: Dict,
             starttime: str = None,
             endtime: str = None,
         ):
         
         self.generate_ribasim_lumping_network(
             simulation_code=simulation_code,
-            # split_node_type_conversion=split_node_type_conversion,
-            # split_node_id_conversion=split_node_id_conversion,
         )
         ribasim_model = self.generate_ribasim_model_complete(
             set_name=set_name,
             starttime=starttime,
-            endtime=endtime
+            endtime=endtime,
+            split_node_type_conversion=split_node_type_conversion,
+            split_node_id_conversion=split_node_id_conversion,
         )
         return ribasim_model
 
@@ -750,7 +750,8 @@ class RibasimLumpingNetwork(BaseModel):
             remove_isolated_basins: bool = False,
             include_flow_boundary_basins: bool = True,
             include_level_boundary_basins: bool = False,
-            remove_holes_min_area: float = 10.0
+            remove_holes_min_area: float = 10.0,
+            option_edges_hydroobjects: bool = False,
         ) -> Dict:
         """
         Generate ribasim_lumping network. This function generates all 
@@ -794,7 +795,9 @@ class RibasimLumpingNetwork(BaseModel):
             include_level_boundary_basins=include_level_boundary_basins,
             remove_holes_min_area=remove_holes_min_area,
             crs=self.crs,
+            option_edges_hydroobjects=option_edges_hydroobjects,
         )
+        self.boundaries_gdf = results['boundaries']
         self.basin_areas_gdf = results['basin_areas']
         self.basins_gdf = results['basins']
         self.areas_gdf = results['areas']
@@ -836,6 +839,8 @@ class RibasimLumpingNetwork(BaseModel):
         results_subgrid: bool = False,
         results_dir: str = 'results',
         database_gpkg: str = 'database.gpkg',
+        split_node_type_conversion: Dict = None, 
+        split_node_id_conversion: Dict = None,
     ):
         if not dummy_model and set_name not in self.basis_set_names:
             # print(f"set_name {set_name} not in available set_names")
@@ -857,12 +862,15 @@ class RibasimLumpingNetwork(BaseModel):
                             pumps=self.pumps_gdf, 
                             culverts=self.culverts_gdf,
                             orifices=self.orifices_gdf,
+                            boundaries=self.boundaries_gdf,
                             basins=self.basins_gdf, 
                             split_nodes=self.split_nodes, 
                             basin_connections=self.basin_connections_gdf, 
                             boundary_connections=self.boundary_connections_gdf,
                             interpolation_lines=interpolation_lines,
-                            set_names=self.basis_set_names
+                            set_names=self.basis_set_names,
+                            split_node_type_conversion=split_node_type_conversion, 
+                            split_node_id_conversion=split_node_id_conversion
                         )
         
         self.nodes_gdf["bedlevel"] = orig_bedlevel
@@ -884,7 +892,7 @@ class RibasimLumpingNetwork(BaseModel):
         self.basins_outflows = basins_outflows
         self.node_bedlevel = node_bedlevel
         self.node_targetlevel = node_targetlevel
-
+        
         basin_h_initial = None
         if not dummy_model and basin_h is not None:
             if self.method_initial_waterlevels == 1:

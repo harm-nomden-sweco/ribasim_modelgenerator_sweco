@@ -240,7 +240,6 @@ def generate_ribasim_model(
     ribasim_level_boundaries = generate_ribasim_level_boundaries(
         level_boundary_static=tables['level_boundary_static'],
         level_boundary_time=tables['level_boundary_time']
-
     )
 
     ribasim_flow_boundaries = generate_ribasim_flow_boundaries(

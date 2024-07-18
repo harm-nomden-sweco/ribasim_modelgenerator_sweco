@@ -47,7 +47,7 @@ def generate_basin_profile_table(
         keep="first"
     )
     basin_profile["level"] = basin_profile["level"].round(4)
-    return basin_profile
+    return basin_profile.drop(columns=["level_diff"])
 
 
 def generate_basin_time_table_laterals(basins, basin_areas, laterals, laterals_data, saveat):
@@ -518,8 +518,8 @@ def generate_ribasim_model_tables(dummy_model, basin_h, basin_a, basins, areas, 
     )
 
     # create tables for BOUNDARIES
-    flow_boundaries = boundaries[boundaries['ribasim_type']=="FlowBoundary"]
-    level_boundaries = boundaries[boundaries['ribasim_type']=="LevelBoundary"]
+    flow_boundaries = boundaries[boundaries['boundary_type']=="FlowBoundary"]
+    level_boundaries = boundaries[boundaries['boundary_type']=="LevelBoundary"]
 
     if dummy_model:
         tables['flow_boundary_time'] = pd.concat([
@@ -582,7 +582,7 @@ def generate_ribasim_model_tables(dummy_model, basin_h, basin_a, basins, areas, 
             )
         )
         tables['level_boundary_time'] = None
-        
+    
     # create tables for PUMPS
     pumps = split_nodes[split_nodes['ribasim_type'] == 'Pump']
     print(f"pumps: generated ({len(pumps)} pumps)")
