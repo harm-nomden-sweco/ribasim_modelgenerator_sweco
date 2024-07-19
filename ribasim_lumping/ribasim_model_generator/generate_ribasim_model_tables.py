@@ -21,9 +21,12 @@ def generate_basin_profile_table(
                 area=[1000.0, 1000.0]*len(basins)
             )
         )
-        
+    
+    # take only basin node ids from basins
+    basin_node_ids = basins.basin_node_id.values
+
     basin_profile = pd.DataFrame(columns=['node_id', 'level', 'area'])
-    for basin_node_id in basin_h.columns:
+    for basin_node_id in basin_node_ids:
         basin_profile_col = basin_h.loc[set_name, [basin_node_id]].reset_index(drop=True)
         basin_profile_col.columns = ['level']
         basin_profile_col["node_id"] = basin_node_id
@@ -34,7 +37,7 @@ def generate_basin_profile_table(
     basin_profile = basin_profile.reset_index(drop=True)
     basin_profile["level_diff"] = basin_profile["level"].diff()
     
-    for node_id in basin_profile.node_id.unique():
+    for node_id in basin_node_ids:
         basin_profile.loc[(basin_profile['node_id'] == node_id).idxmax(), 'level_diff'] = np.nan
 
     basin_profile = basin_profile[
@@ -47,20 +50,37 @@ def generate_basin_profile_table(
         keep="first"
     )
     basin_profile["level"] = basin_profile["level"].round(4)
-    return basin_profile.drop(columns=["level_diff"])
+
+    new_basin_profile = pd.DataFrame()
+    for basin_node_id, profile in basin_profile.groupby("node_id"):
+        if len(profile) == 1:
+            print(f" * Profile of Basin {basin_node_id} has only 1 record. one record is added.")
+            profile.loc[len(basin_profile)] = profile.iloc[0]
+            profile.loc[len(basin_profile), "level"] = profile.iloc[-1]["level"] + 1.0
+            profile.loc[len(basin_profile), "area"] = profile.iloc[-1]["area"] * 2.0
+        new_basin_profile = pd.concat([new_basin_profile, profile])
+    new_basin_profile = new_basin_profile.sort_values(
+        by=["node_id", "level", "area"]
+    ).reset_index(drop=True)
+    return new_basin_profile.drop(columns=["level_diff"])
 
 
 def generate_basin_time_table_laterals(basins, basin_areas, laterals, laterals_data, saveat):
-    laterals_basins = (laterals[["id", "geometry"]]
-                       .sjoin(basin_areas[["basin_node_id", "geometry"]]).drop(columns=["index_right"])
-                       [["id", "basin_node_id"]])
+    laterals_basins = (
+        laterals[["id", "geometry"]]
+        .sjoin(basin_areas[["basin_node_id", "geometry"]]).drop(columns=["index_right"])
+        [["id", "basin_node_id"]]
+    )
     if saveat is not None:
         laterals_data = laterals_data.resample(f"{saveat}S").interpolate()
     
+    # take only basin node ids from basins
+    basin_node_ids = basins.basin_node_id.values
+
     timeseries = pd.DataFrame()
-    for basin_no in basins["basin_node_id"].to_numpy():
-        if basin_no in basin_areas["basin_node_id"].to_numpy():
-            laterals_basin = laterals_basins[laterals_basins["basin_node_id"]==basin_no]["id"].to_numpy()
+    for basin_node_id in basin_node_ids:
+        if basin_node_id in basin_areas["basin_node_id"].to_numpy():
+            laterals_basin = laterals_basins[laterals_basins["basin_node_id"]==basin_node_id]["id"].to_numpy()
             laterals_basin = [l for l in laterals_basin if l in laterals_data.columns]
             timeseries_basin = laterals_data[laterals_basin].sum(axis=1)
             timeseries_basin.name = "drainage"
@@ -75,7 +95,7 @@ def generate_basin_time_table_laterals(basins, basin_areas, laterals, laterals_d
         timeseries_basin["precipitation"] = 0.0
         timeseries_basin["infiltration"] = 0.0
         timeseries_basin["urban_runoff"] = 0.0
-        timeseries_basin["node_id"] = basin_no
+        timeseries_basin["node_id"] = basin_node_id
         
         timeseries = pd.concat([
             timeseries,
@@ -83,12 +103,18 @@ def generate_basin_time_table_laterals(basins, basin_areas, laterals, laterals_d
         ])
     timeseries = timeseries.sort_values(["time", "node_id"]).reset_index(drop=True)
     timeseries = timeseries[["time", "node_id", "precipitation", "potential_evaporation", "drainage", "infiltration", "urban_runoff"]]
+
     return timeseries
+
 
 def generate_basin_time_table_laterals_areas_data(basins, areas, laterals_areas_data):
     timeseries = pd.DataFrame()
-    for basin_no in basins["basin_node_id"].values:
-        areas_basin = list(areas[areas['basin_node_id'] == basin_no]['area_code'].unique())
+
+    # take only basin node ids from basins
+    basin_node_ids = basins.basin_node_id.values
+
+    for basin_node_id in basin_node_ids:
+        areas_basin = list(areas[areas['basin_node_id'] == basin_node_id]['area_code'].unique())
         timeseries_basin = laterals_areas_data[areas_basin].sum(axis=1).to_frame().rename(columns={0: 'Netto_flux'}).reset_index()
         
         timeseries_basin["drainage"] = timeseries_basin["Netto_flux"][timeseries_basin["Netto_flux"]>0]
@@ -100,7 +126,7 @@ def generate_basin_time_table_laterals_areas_data(basins, areas, laterals_areas_
         timeseries_basin["potential_evaporation"] = 0.0
         timeseries_basin["precipitation"] = 0.0
         timeseries_basin["urban_runoff"] = 0.0
-        timeseries_basin["node_id"] = basin_no
+        timeseries_basin["node_id"] = basin_node_id
 
         timeseries = pd.concat([
             timeseries,
@@ -112,6 +138,7 @@ def generate_basin_time_table_laterals_areas_data(basins, areas, laterals_areas_
     timeseries_variables = ["precipitation", "potential_evaporation", "drainage", "infiltration", "urban_runoff"]
     timeseries = timeseries[["time", "node_id"] + timeseries_variables]
     timeseries[timeseries_variables] = timeseries[timeseries_variables].round(6)
+
     return timeseries
 
 
@@ -144,6 +171,7 @@ def generate_basin_time_table_laterals_drainage_per_ha(basins, basin_areas, late
         ])
     timeseries = timeseries.sort_values(["time", "node_id"]).reset_index(drop=True)
     timeseries = timeseries[["time", "node_id", "precipitation", "potential_evaporation", "drainage", "infiltration", "urban_runoff"]]
+
     return timeseries
 
 
@@ -162,6 +190,8 @@ def generate_basin_time_table(
     laterals_areas_data=None,
     laterals_drainage_per_ha=None,
 ):
+    basin_node_ids = basins.basin_node_id.values
+
     if dummy_model:
         basin_time = pd.concat([
             pd.DataFrame(
@@ -175,7 +205,7 @@ def generate_basin_time_table(
                     urban_runoff=0.0
                 )
             )
-            for node_id in basin_state.node_id.values
+            for node_id in basin_node_ids
         ]).sort_values(by=["time", "node_id"]).reset_index(drop=True)
         print('laterals: dummy model, period 2020-01-01 - 2021-01-01')
     elif method_laterals == 1:
@@ -407,11 +437,11 @@ def generate_basin_state_table(basin_h_initial, basin_profile, basin_h, set_name
     return basin_state
 
 
-def generate_basin_subgrid_table(basins_nodes_h_relation, set_name, dummy_model=False, basin_state=None):
+def generate_basin_subgrid_table(basins_nodes_h_relation, set_name, dummy_model=False, basins=None):
     if basins_nodes_h_relation is None:
         if not dummy_model: 
             raise ValueError("basins_nodes_h_relation not OK")
-        elif basin_state is None:
+        elif basins is None:
             raise ValueError("basins_nodes_h_relation not OK")
         
         no_subgrid_per_basin = 3
@@ -419,14 +449,18 @@ def generate_basin_subgrid_table(basins_nodes_h_relation, set_name, dummy_model=
         levels_subgrids = [0.0, 1.0, 2.0]
         return pd.DataFrame(
             dict(
-                subgrid_id=np.repeat(range(len(basin_state)* len(levels_basins)), no_subgrid_per_basin),
-                node_id=np.repeat(basin_state.node_id, no_subgrid_per_basin*len(levels_basins)),
-                basin_level=levels_basins * no_subgrid_per_basin * len(basin_state),
-                subgrid_level=levels_subgrids * no_subgrid_per_basin * len(basin_state)
+                subgrid_id=np.repeat(range(len(basins) * len(levels_basins)), no_subgrid_per_basin),
+                node_id=np.repeat(basins.basin_node_id, no_subgrid_per_basin * len(levels_basins)),
+                basin_level=levels_basins * no_subgrid_per_basin * len(basins),
+                subgrid_level=levels_subgrids * no_subgrid_per_basin * len(basins)
             )
         )
     
-    basin_subgrid = basins_nodes_h_relation[basins_nodes_h_relation["set"] == set_name]
+    basin_subgrid = basins_nodes_h_relation[
+        (basins_nodes_h_relation["set"] == set_name) &
+        (basins_nodes_h_relation["basin_node_id"] != -1)
+    ]
+
     no_subgrid_nodes = len(basin_subgrid["node_no"].unique())
     no_conditions = len(basin_subgrid["condition"].unique())
     basin_subgrid["meta_condition"] = np.repeat(list(range(no_conditions)), no_subgrid_nodes)
@@ -452,7 +486,11 @@ def generate_basin_subgrid_table(basins_nodes_h_relation, set_name, dummy_model=
             ((basin_subgrid["basin_level_diff"] > 0.0001) | basin_subgrid["basin_level_diff"].isna()) & 
             ((basin_subgrid["subgrid_level_diff"] > 0.0001) | basin_subgrid["subgrid_level_diff"].isna())
         ].reset_index(drop=True)
-    return basin_subgrid.drop(columns=["basin_level_diff", "subgrid_level_diff"])
+    
+    basin_subgrid = basin_subgrid.drop(columns=["basin_level_diff", "subgrid_level_diff"])
+    basin_subgrid = basin_subgrid.sort_values(by=["node_id", "subgrid_id", "meta_condition"])
+    basin_subgrid = basin_subgrid.reset_index(drop=True)
+    return basin_subgrid
 
 
 def generate_ribasim_model_tables(dummy_model, basin_h, basin_a, basins, areas, basin_areas, basins_nodes_h_relation,
@@ -485,19 +523,20 @@ def generate_ribasim_model_tables(dummy_model, basin_h, basin_a, basins, areas, 
         set_name=set_name, 
         dummy_model=dummy_model
     )
-
+    
     # create tables for BASIN AREAS
     print('basin-areas: generated')
+    basin_areas = basin_areas[basin_areas.basin_node_id.isin(basins.basin_node_id)]
     tables["basin_areas"] = basin_areas[["basin_node_id", "geometry"]].rename(columns={"basin_node_id": "node_id"})
     tables["basin_areas"]["meta_color_code"] = tables["basin_areas"].index % 50
-
+    
     # create subgrid
     print("subgrid: based on water level relation basin and nodes")
     tables['basin_subgrid'] = generate_basin_subgrid_table(
         basins_nodes_h_relation=basins_nodes_h_relation,
         set_name=set_name,
         dummy_model=dummy_model,
-        basin_state=tables["basin_state"]
+        basins=basins
     )
 
     # create laterals table

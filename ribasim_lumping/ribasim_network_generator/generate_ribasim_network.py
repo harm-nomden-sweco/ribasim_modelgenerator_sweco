@@ -656,7 +656,7 @@ def create_boundary_connections(
     return boundaries_conn, split_nodes, basins
 
 
-def remove_basins_from_boundary(boun_conn, basin_conn, basin):
+def remove_basins_from_boundary(boun_conn, basin_conn, basin, nodes, edges):
     boun_conn_basins = boun_conn.merge(
         basin_conn[["basin", "split_node", "geom_split_node"]],
         how="left",
@@ -668,30 +668,36 @@ def remove_basins_from_boundary(boun_conn, basin_conn, basin):
         (boun_conn_basins["split_node"]!=-1) & 
         (boun_conn_basins["connection"]=="basin_to_boundary")
     ]
-    boun_conn_basins_out["connection"] = "split_node_to_boundary"
-    boun_conn_basins_out["geometry"] = boun_conn_basins_out.apply(
-        lambda x: LineString([x["geom_split_node"], x["geom_boundary"]]), axis=1,
-    )
+    if not boun_conn_basins_out.empty:
+        boun_conn_basins_out["connection"] = "split_node_to_boundary"
+        boun_conn_basins_out["geometry"] = boun_conn_basins_out.apply(
+            lambda x: LineString([x["geom_split_node"], x["geom_boundary"]]), axis=1,
+        )
+        nodes.loc[nodes.basin.isin(boun_conn_basins_out.basin.values), "basin"] = -1
 
     boun_conn_basins_in = boun_conn_basins[
         (boun_conn_basins["split_node"]!=-1) & 
         (boun_conn_basins["connection"]=="boundary_to_basin")
     ]
-    boun_conn_basins_in["connection"] = "boundary_to_split_node"
-    boun_conn_basins_in["geometry"] = boun_conn_basins_in.apply(
-        lambda x: LineString([x["geom_boundary"], x["geom_split_node"]]), axis=1,
-    )
+    if not boun_conn_basins_in.empty:
+        boun_conn_basins_in["connection"] = "boundary_to_split_node"
+        boun_conn_basins_in["geometry"] = boun_conn_basins_in.apply(
+            lambda x: LineString([x["geom_boundary"], x["geom_split_node"]]), axis=1,
+        )
+        nodes.loc[nodes.basin.isin(boun_conn_basins_in.basin.values), "basin"] = -1
     boun_conn = pd.concat([boun_conn_basins_excl, boun_conn_basins_in, boun_conn_basins_out])
     
     basin_conn = basin_conn[~basin_conn.basin.isin(boun_conn.basin.values)]
     basin = basin[~basin.basin.isin(boun_conn.basin.values)]
-    return boun_conn, basin_conn, basin
+    return boun_conn, basin_conn, basin, nodes, edges
 
 
 def remove_boundary_basins_if_not_needed(
         basins: gpd.GeoDataFrame,
         basin_connections: gpd.GeoDataFrame,
         boundary_connections: gpd.GeoDataFrame,
+        nodes: gpd.GeoDataFrame,
+        edges: gpd.GeoDataFrame,
         include_flow_boundary_basins: bool = True,
         include_level_boundary_basins: bool = False,
     ):
@@ -704,12 +710,12 @@ def remove_boundary_basins_if_not_needed(
     level_boundary_connections = boundary_connections[boundary_connections.boundary_type=="LevelBoundary"]
 
     if not include_flow_boundary_basins and not flow_boundary_connections.empty:
-        flow_boundary_connections, basin_connections, basins = remove_basins_from_boundary(
-            flow_boundary_connections, basin_connections, basins
+        flow_boundary_connections, basin_connections, basins, nodes, edges = remove_basins_from_boundary(
+            flow_boundary_connections, basin_connections, basins, nodes, edges
         )
     if not include_level_boundary_basins and not level_boundary_connections.empty:
-        level_boundary_connections, basin_connections, basins = remove_basins_from_boundary(
-            level_boundary_connections, basin_connections, basins
+        level_boundary_connections, basin_connections, basins, nodes, edges = remove_basins_from_boundary(
+            level_boundary_connections, basin_connections, basins, nodes, edges
         )
     
     boundary_connections = pd.concat([flow_boundary_connections, level_boundary_connections])
@@ -727,7 +733,7 @@ def remove_boundary_basins_if_not_needed(
         columns=["geom_basin", "geom_split_node"], 
         errors='ignore'
     )
-    return boundary_connections, basin_connections, basins
+    return boundary_connections, basin_connections, basins, nodes, edges
 
 
 def remove_holes_from_basin_areas(basin_areas: gpd.GeoDataFrame, min_area: float):
@@ -808,10 +814,8 @@ def regenerate_node_ids(
     basin_areas["basin_node_id"] = basin_areas["basin_node_id"].astype(int)
 
     areas["basin_node_id"] = areas["basin"].apply(lambda x: x + len_split_nodes + len_boundaries if x>0 else -1)
-
-    mapping_basins_node_id = basins.set_index("basin")["basin_node_id"].to_dict()
-    nodes["basin_node_id"] = nodes["basin"].replace(mapping_basins_node_id)
-    edges["basin_node_id"] = edges["basin"].replace(mapping_basins_node_id)
+    nodes["basin_node_id"] = nodes["basin"].apply(lambda x: x + len_split_nodes + len_boundaries if x>0 else -1)
+    edges["basin_node_id"] = edges["basin"].apply(lambda x: x + len_split_nodes + len_boundaries if x>0 else -1)
 
     connections = pd.concat([
         basin_connections[["from_node_id", "to_node_id"]], 
@@ -989,12 +993,14 @@ def generate_ribasim_network_using_split_nodes(
         nodes=nodes,
         edges=edges,
     )
-    boundary_connections, basin_connections, basins  = remove_boundary_basins_if_not_needed(
+    boundary_connections, basin_connections, basins, nodes, edges  = remove_boundary_basins_if_not_needed(
         basins=basins,
         basin_connections=basin_connections,
         boundary_connections=boundary_connections,
         include_flow_boundary_basins=include_flow_boundary_basins,
-        include_level_boundary_basins=include_level_boundary_basins
+        include_level_boundary_basins=include_level_boundary_basins,
+        nodes=nodes,
+        edges=edges
     )
     if remove_isolated_basins:
         basins, basin_areas, areas, edges, nodes = remove_isolated_basins_and_update_administration(

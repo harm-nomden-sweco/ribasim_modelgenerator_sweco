@@ -60,10 +60,10 @@ def read_arrow_file(simulation_dir: Path, file_name: str, results_dir: str = "re
 
 
 def get_inflow_outflow_edge_data(ribasim_model: ribasim.Model):
-    node_df = ribasim_model.node_table().df
-    edge_df = ribasim_model.edge.df
+    node_df = ribasim_model.network.node.df
+    edge_df = ribasim_model.network.edge.df
 
-    basin_nos = ribasim_model.basin.node.df.node_id.values
+    basin_nos = node_df[node_df.node_type=="Basin"].node_id
     flow_edge = edge_df[edge_df.edge_type=="flow"]
     flow_edge = flow_edge[
         (flow_edge.to_node_id.isin(basin_nos)) | 
@@ -242,7 +242,7 @@ def plot_results_basins_ribasim_model(
     simulation_path: Path, 
 ):
     ribasim_results = read_ribasim_model_results(simulation_path=simulation_path)
-    basin_nos = ribasim_model.basin.node.df.node_id.values
+    basin_nos = node_df[node_df.node_type=="Basin"].node_id
     for basin_no in basin_nos:
         print(f" - Basin {basin_no}")
         plot_results_basin_ribasim_model(
@@ -295,9 +295,7 @@ def plot_results_basin_ribasim_model(
     if basin_no != basin_results.basin_no:
         basin_no = basin_results.basin_no
     
-    basin_name = ribasim_model.basin.node.df.set_index("node_id").loc[basin_no, "name"]
-    if basin_name == "":
-        basin_name = "Basin"
+    basin_name = "Basin"
 
     xmin = basin_results.basin.index.min()
     xmax = basin_results.basin.index.max()
@@ -348,6 +346,7 @@ def plot_results_basin_ribasim_model(
     ax3.hlines(
         y=0.0, xmin=xmin, xmax=xmax, linestyle="-", color='black'
     )
+
     basin["basin_flow"] = basin["drainage"] -  basin["infiltration"]
     basin.basin_flow.rename(f"Local inflow").plot(ax=ax3, style="-o", markersize=2)
 

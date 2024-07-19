@@ -446,6 +446,7 @@ def preprocessing_ribasim_model_tables(
     basin_a, basin_v = generate_surface_storage_for_basins(node_a, node_v, nodes)
     edge_q_df = get_discharges_table_from_simulations(map_data)
     weir_q_df, uniweir_q_df, orifice_q_df, culvert_q_df, bridge_q_df, pump_q_df = get_discharges_table_structures_from_simulations(his_data)
+
     basins_nodes_h_relation = generate_h_relation_basins_nodes(
         nodes=nodes,
         node_h_basin=node_h_basin,
